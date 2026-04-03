@@ -5,6 +5,7 @@ package renderer
 import (
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -97,9 +98,16 @@ func PrintTable(w io.Writer, records []normalizer.Record) {
 	}
 }
 
-// PrintSummary writes counts broken down by client type with an optional label.
-// label is printed as the section header (e.g. "Non-PKI Client Summary").
-// Pass an empty label to use the default "Summary" heading.
+// mountStat holds per-client-type counts for one mount path.
+type mountStat struct {
+	path       string
+	typeCounts map[string]int
+	total      int
+}
+
+// PrintSummary writes a breakdown by mount path (then by client type within
+// each mount) followed by a grand total. label is the section header;
+// pass "" to use the default "Summary" heading.
 func PrintSummary(w io.Writer, records []normalizer.Record, label string) {
 	if len(records) == 0 {
 		return
@@ -109,27 +117,109 @@ func PrintSummary(w io.Writer, records []normalizer.Record, label string) {
 		label = "Summary"
 	}
 
-	counts := make(map[string]int)
+	// Aggregate: mount path → client type → count.
+	statMap := make(map[string]*mountStat)
 	for _, r := range records {
-		counts[r.ClientType]++
+		mp := r.MountPath
+		if mp == "" {
+			mp = "(no mount)"
+		}
+		ms, ok := statMap[mp]
+		if !ok {
+			ms = &mountStat{path: mp, typeCounts: make(map[string]int)}
+			statMap[mp] = ms
+		}
+		ms.typeCounts[r.ClientType]++
+		ms.total++
 	}
+
+	// Sort mount paths alphabetically.
+	mountPaths := make([]string, 0, len(statMap))
+	for mp := range statMap {
+		mountPaths = append(mountPaths, mp)
+	}
+	sort.Strings(mountPaths)
+
+	// Compute column widths.
+	mountColW := len("Mount Path")
+	for _, mp := range mountPaths {
+		if l := utf8.RuneCountInString(mp); l > mountColW {
+			mountColW = l
+		}
+	}
+	typeColW := len("Client Type")
+	countColW := len("Count")
+
+	typeOrder := []string{"entity", "non-entity", "acme", "secret-sync", "unknown"}
 
 	fmt.Fprintln(w)
 	fmt.Fprintf(w, "%s\n", label)
 	fmt.Fprintf(w, "%s\n", strings.Repeat("-", len(label)))
-	fmt.Fprintf(w, "  %-18s %d\n", "Total clients:", len(records))
 
-	typeOrder := []string{"entity", "non-entity", "acme", "secret-sync", "unknown"}
-	for _, t := range typeOrder {
-		if n, ok := counts[t]; ok {
-			fmt.Fprintf(w, "  %-18s %d\n", t+":", n)
-			delete(counts, t)
+	// Header row.
+	fmt.Fprintf(w, "  %-*s  %-*s  %s\n", mountColW, "Mount Path", typeColW, "Client Type", "Count")
+	fmt.Fprintf(w, "  %s  %s  %s\n",
+		strings.Repeat("-", mountColW),
+		strings.Repeat("-", typeColW),
+		strings.Repeat("-", countColW),
+	)
+
+	// Data rows — one group per mount path.
+	for i, mp := range mountPaths {
+		ms := statMap[mp]
+
+		// Print known types in order, then any remaining unknown types.
+		remaining := make(map[string]int, len(ms.typeCounts))
+		for k, v := range ms.typeCounts {
+			remaining[k] = v
+		}
+
+		firstRow := true
+		printMountRow := func(clientType string, count int) {
+			mountLabel := ""
+			if firstRow {
+				mountLabel = mp
+				firstRow = false
+			}
+			fmt.Fprintf(w, "  %-*s  %-*s  %d\n", mountColW, mountLabel, typeColW, clientType, count)
+		}
+
+		for _, t := range typeOrder {
+			if n, ok := remaining[t]; ok {
+				printMountRow(t, n)
+				delete(remaining, t)
+			}
+		}
+		for _, t := range sortedKeys(remaining) {
+			printMountRow(t, remaining[t])
+		}
+
+		// Subtotal for this mount.
+		fmt.Fprintf(w, "  %-*s  %-*s  %d\n", mountColW, "", typeColW, "subtotal:", ms.total)
+
+		// Blank line between mount groups, not after the last one.
+		if i < len(mountPaths)-1 {
+			fmt.Fprintln(w)
 		}
 	}
-	// Catch any types not in the ordered list.
-	for t, n := range counts {
-		fmt.Fprintf(w, "  %-18s %d\n", t+":", n)
+
+	// Grand total.
+	fmt.Fprintf(w, "  %s  %s  %s\n",
+		strings.Repeat("-", mountColW),
+		strings.Repeat("-", typeColW),
+		strings.Repeat("-", countColW),
+	)
+	fmt.Fprintf(w, "  %-*s  %-*s  %d\n", mountColW, "", typeColW, "TOTAL:", len(records))
+}
+
+// sortedKeys returns the keys of m in sorted order.
+func sortedKeys(m map[string]int) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
 	}
+	sort.Strings(keys)
+	return keys
 }
 
 // PrintPKIReport prints the PKI client table followed by its summary section.

@@ -153,9 +153,11 @@ func parseTime(raw string) time.Time {
 }
 
 // IsPKIClient reports whether r is a PKI client, defined as any record whose
-// auth_method is "cert" (case-insensitive, already normalized to lowercase).
+// mount_accessor starts with "auth_cert" (case-insensitive). The prefix check
+// is done on the raw MountAccessor value since it is not lowercased during
+// normalization.
 func IsPKIClient(r Record) bool {
-	return r.AuthMethod == "cert"
+	return strings.HasPrefix(strings.ToLower(r.MountAccessor), "auth_cert")
 }
 
 // PartitionPKI splits records into two slices: PKI clients and non-PKI clients.

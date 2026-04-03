@@ -79,23 +79,93 @@ func TestPrintTable_ZeroTimeFmtDash(t *testing.T) {
 
 func TestPrintSummary(t *testing.T) {
 	records := []normalizer.Record{
-		{ClientType: "entity"},
-		{ClientType: "entity"},
-		{ClientType: "non-entity"},
-		{ClientType: "acme"},
+		{ClientType: "entity", MountPath: "auth/approle/"},
+		{ClientType: "entity", MountPath: "auth/approle/"},
+		{ClientType: "non-entity", MountPath: "auth/ldap/"},
+		{ClientType: "acme", MountPath: "pki/"},
 	}
 	var buf strings.Builder
 	PrintSummary(&buf, records, "")
 	out := buf.String()
 
-	if !strings.Contains(out, "Total clients:") {
-		t.Errorf("expected 'Total clients:' in summary, got: %s", out)
+	if !strings.Contains(out, "Mount Path") {
+		t.Errorf("expected 'Mount Path' column header, got:\n%s", out)
 	}
-	if !strings.Contains(out, "entity:") {
-		t.Error("expected entity count in summary")
+	if !strings.Contains(out, "Client Type") {
+		t.Errorf("expected 'Client Type' column header, got:\n%s", out)
 	}
-	if !strings.Contains(out, "non-entity:") {
-		t.Error("expected non-entity count in summary")
+	if !strings.Contains(out, "auth/approle/") {
+		t.Errorf("expected mount path 'auth/approle/' in summary, got:\n%s", out)
+	}
+	if !strings.Contains(out, "auth/ldap/") {
+		t.Errorf("expected mount path 'auth/ldap/' in summary, got:\n%s", out)
+	}
+	if !strings.Contains(out, "pki/") {
+		t.Errorf("expected mount path 'pki/' in summary, got:\n%s", out)
+	}
+	if !strings.Contains(out, "entity") {
+		t.Errorf("expected client type 'entity' in summary, got:\n%s", out)
+	}
+	if !strings.Contains(out, "TOTAL:") {
+		t.Errorf("expected 'TOTAL:' grand total line, got:\n%s", out)
+	}
+	if !strings.Contains(out, "subtotal:") {
+		t.Errorf("expected 'subtotal:' per-mount line, got:\n%s", out)
+	}
+}
+
+func TestPrintSummary_MountPathsSorted(t *testing.T) {
+	records := []normalizer.Record{
+		{ClientType: "entity", MountPath: "auth/zzz/"},
+		{ClientType: "entity", MountPath: "auth/aaa/"},
+		{ClientType: "entity", MountPath: "auth/mmm/"},
+	}
+	var buf strings.Builder
+	PrintSummary(&buf, records, "")
+	out := buf.String()
+
+	posAAA := strings.Index(out, "auth/aaa/")
+	posMMM := strings.Index(out, "auth/mmm/")
+	posZZZ := strings.Index(out, "auth/zzz/")
+	if posAAA < 0 || posMMM < 0 || posZZZ < 0 {
+		t.Fatalf("one or more mount paths missing from output:\n%s", out)
+	}
+	if !(posAAA < posMMM && posMMM < posZZZ) {
+		t.Errorf("mount paths not in alphabetical order in output:\n%s", out)
+	}
+}
+
+func TestPrintSummary_NoMountPath(t *testing.T) {
+	records := []normalizer.Record{
+		{ClientType: "entity", MountPath: ""},
+	}
+	var buf strings.Builder
+	PrintSummary(&buf, records, "")
+	out := buf.String()
+	if !strings.Contains(out, "(no mount)") {
+		t.Errorf("expected '(no mount)' placeholder for empty mount path, got:\n%s", out)
+	}
+}
+
+func TestPrintSummary_MultipleTypesPerMount(t *testing.T) {
+	records := []normalizer.Record{
+		{ClientType: "entity", MountPath: "auth/ldap/"},
+		{ClientType: "non-entity", MountPath: "auth/ldap/"},
+		{ClientType: "entity", MountPath: "auth/ldap/"},
+	}
+	var buf strings.Builder
+	PrintSummary(&buf, records, "")
+	out := buf.String()
+
+	// auth/ldap/ should appear once as the mount label, with both types listed.
+	if count := strings.Count(out, "auth/ldap/"); count != 1 {
+		t.Errorf("expected mount path to appear exactly once (as label), got %d occurrences:\n%s", count, out)
+	}
+	if !strings.Contains(out, "entity") {
+		t.Error("expected 'entity' in output")
+	}
+	if !strings.Contains(out, "non-entity") {
+		t.Error("expected 'non-entity' in output")
 	}
 }
 
@@ -116,6 +186,7 @@ func TestPrintPKIReport_WithPKI(t *testing.T) {
 			NamespacePath: "[root]",
 			ClientType:    "entity",
 			AuthMethod:    "cert",
+			MountAccessor: "auth_cert_internal",
 			MountPath:     "auth/cert/",
 		},
 		{
@@ -123,6 +194,7 @@ func TestPrintPKIReport_WithPKI(t *testing.T) {
 			NamespacePath: "finance/",
 			ClientType:    "entity",
 			AuthMethod:    "cert",
+			MountAccessor: "auth_cert_prod",
 			MountPath:     "auth/cert/",
 		},
 	}

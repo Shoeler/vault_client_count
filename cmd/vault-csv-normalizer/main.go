@@ -128,5 +128,5 @@ CSV FORMAT (Vault activity export):
   Older Vault exports may use "timestamp" instead of "token_creation_time".
   All variants are handled automatically.
 
-  PKI clients are identified by auth_method = "cert".`)
+  PKI clients are identified by a mount_accessor that starts with "auth_cert".`)
 }

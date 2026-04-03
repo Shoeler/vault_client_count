@@ -1,0 +1,16 @@
+# IDE
+.vscode/
+
+# Go build artifacts
+*.exe
+*.test
+*.out
+/bin/
+/dist/
+
+# Go modules
+vendor/
+
+# OS
+.DS_Store
+Thumbs.db

@@ -164,50 +164,53 @@ func TestSort_UnknownKey(t *testing.T) {
 
 func TestIsPKIClient(t *testing.T) {
 	cases := []struct {
-		authMethod string
-		want       bool
+		mountAccessor string
+		want          bool
 	}{
-		{"cert", true},
-		{"Cert", false},   // already normalized to lowercase before IsPKIClient is called
-		{"approle", false},
-		{"ldap", false},
+		{"auth_cert_abc123", true},
+		{"auth_cert_", true},        // bare prefix still matches
+		{"AUTH_CERT_xyz", true},     // case-insensitive
+		{"Auth_Cert_Mixed", true},   // mixed case
+		{"auth_approle_abc", false},
+		{"auth_ldap_xyz", false},
+		{"cert_auth_abc", false},    // prefix in wrong position
 		{"", false},
 	}
 	for _, c := range cases {
-		r := Record{AuthMethod: c.authMethod}
+		r := Record{MountAccessor: c.mountAccessor}
 		got := IsPKIClient(r)
 		if got != c.want {
-			t.Errorf("IsPKIClient(AuthMethod=%q) = %v, want %v", c.authMethod, got, c.want)
+			t.Errorf("IsPKIClient(MountAccessor=%q) = %v, want %v", c.mountAccessor, got, c.want)
 		}
 	}
 }
 
 func TestIsPKIClient_NormalizationRoundtrip(t *testing.T) {
-	// Simulate a real record going through Normalize, which lowercases AuthMethod.
+	// MountAccessor is preserved as-is by Normalize; IsPKIClient lowercases internally.
 	raw := []parser.RawRecord{
-		{ClientID: "pki-001", AuthMethod: "Cert", ClientType: "entity"},
-		{ClientID: "pki-002", AuthMethod: "CERT", ClientType: "entity"},
-		{ClientID: "other-001", AuthMethod: "ApprOle", ClientType: "entity"},
+		{ClientID: "pki-001", MountAccessor: "auth_cert_internal", ClientType: "entity"},
+		{ClientID: "pki-002", MountAccessor: "AUTH_CERT_PROD", ClientType: "entity"},
+		{ClientID: "other-001", MountAccessor: "auth_approle_web", ClientType: "entity"},
 	}
 	records := Normalize(raw)
 	if !IsPKIClient(records[0]) {
-		t.Error("expected Cert (mixed case) to be recognized as PKI after normalization")
+		t.Error("expected auth_cert_internal to be recognized as PKI after normalization")
 	}
 	if !IsPKIClient(records[1]) {
-		t.Error("expected CERT (uppercase) to be recognized as PKI after normalization")
+		t.Error("expected AUTH_CERT_PROD to be recognized as PKI after normalization")
 	}
 	if IsPKIClient(records[2]) {
-		t.Error("expected approle to NOT be recognized as PKI")
+		t.Error("expected auth_approle_web to NOT be recognized as PKI")
 	}
 }
 
 func TestPartitionPKI(t *testing.T) {
 	records := []Record{
-		{ClientID: "e1", AuthMethod: "approle", ClientType: "entity"},
-		{ClientID: "p1", AuthMethod: "cert", ClientType: "entity"},
-		{ClientID: "e2", AuthMethod: "ldap", ClientType: "non-entity"},
-		{ClientID: "p2", AuthMethod: "cert", ClientType: "entity"},
-		{ClientID: "e3", AuthMethod: "oidc", ClientType: "entity"},
+		{ClientID: "e1", MountAccessor: "auth_approle_web", ClientType: "entity"},
+		{ClientID: "p1", MountAccessor: "auth_cert_internal", ClientType: "entity"},
+		{ClientID: "e2", MountAccessor: "auth_ldap_corp", ClientType: "non-entity"},
+		{ClientID: "p2", MountAccessor: "auth_cert_prod", ClientType: "entity"},
+		{ClientID: "e3", MountAccessor: "auth_oidc_okta", ClientType: "entity"},
 	}
 
 	pki, nonPKI := PartitionPKI(records)
@@ -219,21 +222,21 @@ func TestPartitionPKI(t *testing.T) {
 		t.Errorf("expected 3 non-PKI records, got %d", len(nonPKI))
 	}
 	for _, r := range pki {
-		if r.AuthMethod != "cert" {
-			t.Errorf("PKI partition contains non-cert record: %s", r.ClientID)
+		if !strings.HasPrefix(strings.ToLower(r.MountAccessor), "auth_cert") {
+			t.Errorf("PKI partition contains non-cert record: %s (accessor: %s)", r.ClientID, r.MountAccessor)
 		}
 	}
 	for _, r := range nonPKI {
-		if r.AuthMethod == "cert" {
-			t.Errorf("non-PKI partition contains cert record: %s", r.ClientID)
+		if strings.HasPrefix(strings.ToLower(r.MountAccessor), "auth_cert") {
+			t.Errorf("non-PKI partition contains cert record: %s (accessor: %s)", r.ClientID, r.MountAccessor)
 		}
 	}
 }
 
 func TestPartitionPKI_AllPKI(t *testing.T) {
 	records := []Record{
-		{ClientID: "p1", AuthMethod: "cert"},
-		{ClientID: "p2", AuthMethod: "cert"},
+		{ClientID: "p1", MountAccessor: "auth_cert_a"},
+		{ClientID: "p2", MountAccessor: "auth_cert_b"},
 	}
 	pki, nonPKI := PartitionPKI(records)
 	if len(pki) != 2 {
@@ -246,8 +249,8 @@ func TestPartitionPKI_AllPKI(t *testing.T) {
 
 func TestPartitionPKI_NoPKI(t *testing.T) {
 	records := []Record{
-		{ClientID: "e1", AuthMethod: "approle"},
-		{ClientID: "e2", AuthMethod: "ldap"},
+		{ClientID: "e1", MountAccessor: "auth_approle_abc"},
+		{ClientID: "e2", MountAccessor: "auth_ldap_xyz"},
 	}
 	pki, nonPKI := PartitionPKI(records)
 	if len(pki) != 0 {
