@@ -4,7 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/vault-csv-normalizer/internal/normalizer"
 	"github.com/vault-csv-normalizer/internal/parser"
@@ -26,6 +25,7 @@ func main() {
 	var filterNS string
 	var filterType string
 	var countPKI bool
+	var noDedup bool
 	var showHelp bool
 
 	flag.Var(&inputFiles, "f", "Path to a Vault client export CSV file. May be specified multiple times.")
@@ -33,6 +33,7 @@ func main() {
 	flag.StringVar(&filterNS, "namespace", "", "Filter rows by namespace path (substring match)")
 	flag.StringVar(&filterType, "type", "", "Filter rows by client type: entity, non-entity, acme, secret-sync")
 	flag.BoolVar(&countPKI, "p", false, "Partition and report PKI clients (auth_method=cert) separately from non-PKI clients")
+	flag.BoolVar(&noDedup, "d", false, "Disable deduplication (count duplicate client IDs separately)")
 	flag.BoolVar(&showHelp, "help", false, "Show usage information")
 	flag.Parse()
 
@@ -57,8 +58,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Normalize and deduplicate across all input files.
-	normalized := normalizer.Deduplicate(normalizer.Normalize(allRecords))
+	// Normalize (and optionally deduplicate) across all input files.
+	normalized := normalizer.Normalize(allRecords)
+	if !noDedup {
+		normalized = normalizer.Deduplicate(normalized)
+	}
 
 	// Apply filters.
 	if filterNS != "" {
@@ -75,23 +79,10 @@ func main() {
 	}
 
 	if countPKI {
-		// Split into PKI (auth_method=cert) and non-PKI, report each separately.
 		pkiRecords, nonPKIRecords := normalizer.PartitionPKI(normalized)
-
-		fmt.Fprintln(os.Stdout, "Non-PKI Clients")
-		fmt.Fprintln(os.Stdout, strings.Repeat("=", 15))
-		renderer.PrintTable(os.Stdout, nonPKIRecords)
-
-		fmt.Fprintln(os.Stdout)
-		fmt.Fprintln(os.Stdout, "PKI (cert) Clients")
-		fmt.Fprintln(os.Stdout, strings.Repeat("=", 18))
-		renderer.PrintTable(os.Stdout, pkiRecords)
-
 		renderer.PrintSummary(os.Stdout, nonPKIRecords, "Non-PKI Client Summary")
 		renderer.PrintSummary(os.Stdout, pkiRecords, "PKI Client Summary")
 	} else {
-		// Default: render all records together.
-		renderer.PrintTable(os.Stdout, normalized)
 		renderer.PrintSummary(os.Stdout, normalized, "")
 	}
 }
