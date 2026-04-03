@@ -1,0 +1,5 @@
+client_id,namespace_id,namespace_path,mount_accessor,mount_path,mount_type,auth_method,client_type,timestamp
+a1b2c3d4-0002-0002-0002-000000000001,root,[root],auth_approle_abc123,auth/approle/,approle,approle,entity,2024-02-03T09:00:00Z
+a1b2c3d4-0002-0002-0002-000000000002,ns-mkt-01,marketing/,auth_oidc_okta,auth/oidc/,oidc,oidc,entity,2024-02-07T10:30:00Z
+a1b2c3d4-0002-0002-0002-000000000003,ns-edu-01,education/,auth_github_dev,auth/github/,github,github,non-entity,2024-02-14T14:00:00Z
+a1b2c3d4-0002-0002-0002-000000000004,root,[root],pki_acme_global,pki/,pki,acme,acme,2024-02-18T00:00:00Z

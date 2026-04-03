@@ -1,0 +1,10 @@
+client_id,namespace_id,namespace_path,mount_accessor,mount_path,mount_type,auth_method,client_type,token_creation_time,client_first_usage_time
+a1b2c3d4-0001-0001-0001-000000000001,root,[root],auth_approle_abc123,auth/approle/,approle,approle,entity,2024-01-05T08:12:34Z,2024-01-05T09:00:00Z
+a1b2c3d4-0001-0001-0001-000000000002,root,[root],auth_ldap_xyz789,auth/ldap/,ldap,ldap,entity,2024-01-10T14:22:11Z,2024-01-10T15:00:00Z
+a1b2c3d4-0001-0001-0001-000000000003,ns-edu-01,education/,auth_userpass_edu,auth/userpass/,userpass,userpass,non-entity,2024-01-12T09:00:00Z,
+a1b2c3d4-0001-0001-0001-000000000004,ns-edu-02,education/training/,auth_approle_abc123,auth/approle/,approle,approle,entity,2024-01-15T11:30:00Z,2024-01-15T12:00:00Z
+a1b2c3d4-0001-0001-0001-000000000005,ns-fin-01,finance/,auth_ldap_xyz789,auth/ldap/,ldap,ldap,non-entity,2024-01-20T16:45:00Z,2024-01-20T17:00:00Z
+a1b2c3d4-0001-0001-0001-000000000006,root,[root],pki_acme_global,pki/,pki,acme,acme,2024-01-22T00:00:00Z,2024-01-22T00:00:00Z
+a1b2c3d4-0001-0001-0001-000000000007,root,[root],sync_dest_aws,aws-sm/,aws,secret-sync,secret-sync,2024-01-25T08:00:00Z,2024-01-25T08:00:00Z
+a1b2c3d4-0001-0001-0001-000000000008,root,[root],auth_cert_internal,auth/cert/,cert,cert,entity,2024-01-08T06:00:00Z,2024-01-08T07:00:00Z
+a1b2c3d4-0001-0001-0001-000000000009,ns-fin-01,finance/,auth_cert_internal,auth/cert/,cert,cert,entity,2024-01-18T10:00:00Z,2024-01-18T10:30:00Z
