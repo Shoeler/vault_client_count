@@ -1,6 +1,9 @@
 # IDE
 .vscode/
 
+# Claude
+.claude/
+
 # Go build artifacts
 *.exe
 *.test

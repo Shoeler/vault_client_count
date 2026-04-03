@@ -57,8 +57,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Normalize.
-	normalized := normalizer.Normalize(allRecords)
+	// Normalize and deduplicate across all input files.
+	normalized := normalizer.Deduplicate(normalizer.Normalize(allRecords))
 
 	// Apply filters.
 	if filterNS != "" {

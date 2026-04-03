@@ -152,6 +152,21 @@ func parseTime(raw string) time.Time {
 	return time.Time{} // unparseable → zero value
 }
 
+// Deduplicate removes records with duplicate ClientIDs, keeping the first
+// occurrence across all input files.
+func Deduplicate(records []Record) []Record {
+	seen := make(map[string]struct{}, len(records))
+	out := records[:0:0]
+	for _, r := range records {
+		if _, dup := seen[r.ClientID]; dup {
+			continue
+		}
+		seen[r.ClientID] = struct{}{}
+		out = append(out, r)
+	}
+	return out
+}
+
 // IsPKIClient reports whether r is a PKI client, defined as any record whose
 // mount_accessor starts with "auth_cert" (case-insensitive). The prefix check
 // is done on the raw MountAccessor value since it is not lowercased during
