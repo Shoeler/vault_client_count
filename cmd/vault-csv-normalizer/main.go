@@ -81,9 +81,14 @@ func main() {
 		fmt.Fprintln(os.Stdout, "Non-PKI Clients")
 		fmt.Fprintln(os.Stdout, strings.Repeat("=", 15))
 		renderer.PrintTable(os.Stdout, nonPKIRecords)
-		renderer.PrintSummary(os.Stdout, nonPKIRecords, "Non-PKI Client Summary")
 
-		renderer.PrintPKIReport(os.Stdout, pkiRecords)
+		fmt.Fprintln(os.Stdout)
+		fmt.Fprintln(os.Stdout, "PKI (cert) Clients")
+		fmt.Fprintln(os.Stdout, strings.Repeat("=", 18))
+		renderer.PrintTable(os.Stdout, pkiRecords)
+
+		renderer.PrintSummary(os.Stdout, nonPKIRecords, "Non-PKI Client Summary")
+		renderer.PrintSummary(os.Stdout, pkiRecords, "PKI Client Summary")
 	} else {
 		// Default: render all records together.
 		renderer.PrintTable(os.Stdout, normalized)

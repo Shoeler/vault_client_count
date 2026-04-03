@@ -49,13 +49,6 @@ var columns = []column{
 		},
 	},
 	{
-		header: "First Usage",
-		width:  22,
-		get: func(r normalizer.Record) string {
-			return fmtTime(r.ClientFirstUsageTime)
-		},
-	},
-	{
 		header: "Client ID",
 		width:  36,
 		get:    func(r normalizer.Record) string { return r.ClientID },
