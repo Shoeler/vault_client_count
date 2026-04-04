@@ -1,5 +1,7 @@
 # vault-csv-normalizer
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 A CLI tool that reads one or more **HashiCorp Vault client export CSV files**,
 normalizes their data (consistent column names, types, and values across Vault
 versions), and displays a summary of client counts by mount path and type.
