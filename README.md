@@ -2,11 +2,11 @@
 
 A CLI tool that reads one or more **HashiCorp Vault client export CSV files**,
 normalizes their data (consistent column names, types, and values across Vault
-versions), and displays the results as a pretty-printed terminal table.
+versions), and displays a summary of client counts by mount path and type.
 
 ## Features
 
-- Accepts **multiple CSV files** via repeated `-f` flags
+- Accepts **multiple CSV files** via `-f file1.csv file2.csv ...` or repeated `-f` flags
 - Handles **column name variants** across Vault versions:
   - `timestamp` → `token_creation_time` (Vault < 1.17)
   - `namespace` → `namespace_path`
@@ -16,9 +16,11 @@ versions), and displays the results as a pretty-printed terminal table.
 - Normalizes **namespace paths** (empty/`root` → `[root]`, ensures trailing `/`)
 - Normalizes **mount paths** (ensures trailing `/`)
 - Normalizes **timestamps** to UTC across all common Vault timestamp formats
+- **Deduplicates** clients across files by `client_id` (disable with `-d`)
 - **Filters** by namespace (substring) or client type
 - **Sorts** by any column
-- Prints a **summary footer** with counts per client type
+- Prints a **summary** with counts broken down by mount path and client type
+- Optionally **partitions PKI clients** (`-p`) into a separate summary
 - Skips blank/summary rows (rows with no `client_id`) silently
 
 ## Installation
@@ -35,11 +37,13 @@ Requires **Go 1.22+**. No external dependencies — pure standard library.
 ## Usage
 
 ```
-vault-csv-normalizer -f <file1.csv> [-f <file2.csv> ...] [options]
+vault-csv-normalizer -f <file1.csv> [file2.csv ...] [options]
+vault-csv-normalizer -f <file1.csv> -f <file2.csv> [options]
 
 OPTIONS:
   -f string
-        Path to a Vault client export CSV file. May be specified multiple times.
+        One or more Vault client export CSV files. May be specified multiple
+        times or followed by multiple paths.
   -sort string
         Column to sort by: namespace_path, client_type, token_creation_time,
         client_first_usage_time, mount_accessor, mount_path, auth_method, source
@@ -48,6 +52,8 @@ OPTIONS:
         Filter rows by namespace path (substring match)
   -type string
         Filter rows by client type: entity, non-entity, acme, secret-sync
+  -p    Partition and report PKI clients (auth_method=cert) separately
+  -d    Disable deduplication (count duplicate client IDs separately)
   -help
         Show usage information
 ```
@@ -58,7 +64,10 @@ OPTIONS:
 # Single file, default sort (namespace_path)
 vault-csv-normalizer -f export-2024-01.csv
 
-# Multiple months merged into one view
+# Multiple months — pass files after one -f flag
+vault-csv-normalizer -f jan.csv feb.csv mar.csv
+
+# Or use repeated -f flags
 vault-csv-normalizer -f jan.csv -f feb.csv -f mar.csv
 
 # Sort by client type
@@ -67,29 +76,57 @@ vault-csv-normalizer -f export.csv --sort client_type
 # Show only the education namespace and children
 vault-csv-normalizer -f export.csv --namespace education/
 
-# Show only entity clients, sorted by first usage time
-vault-csv-normalizer -f export.csv --type entity --sort client_first_usage_time
+# Show only entity clients
+vault-csv-normalizer -f export.csv --type entity
+
+# Partition PKI clients into a separate summary
+vault-csv-normalizer -f export.csv -p
+
+# PKI report across multiple months
+vault-csv-normalizer -f jan.csv feb.csv -p
+
+# Count all records without deduplication
+vault-csv-normalizer -f jan.csv feb.csv -d
 
 # Combine filters and multiple files
-vault-csv-normalizer -f jan.csv -f feb.csv --namespace finance/ --type non-entity
+vault-csv-normalizer -f jan.csv feb.csv --namespace finance/ --type non-entity
 ```
 
 ### Sample Output
 
 ```
-Namespace Path      Client Type   Auth Method   Mount Path      Token Created          First Usage            Client ID                             Source File
-----------------    ------------  ------------  ------------    ---------------------- ---------------------- ------------------------------------  -----------
-[root]              entity        approle       auth/approle/   2024-01-05 08:12:34Z   2024-01-05 09:00:00Z   a1b2c3d4-0001-0001-0001-000000000001  export-2024-01.csv
-[root]              acme          acme          pki/            2024-01-22 00:00:00Z   2024-01-22 00:00:00Z   a1b2c3d4-0001-0001-0001-000000000006  export-2024-01.csv
-education/          non-entity    userpass      auth/userpass/  2024-01-12 09:00:00Z   —                      a1b2c3d4-0001-0001-0001-000000000003  export-2024-01.csv
-education/training/ entity        approle       auth/approle/   2024-01-15 11:30:00Z   2024-01-15 12:00:00Z   a1b2c3d4-0001-0001-0001-000000000004  export-2024-01.csv
-finance/            non-entity    ldap          auth/ldap/      2024-01-20 16:45:00Z   2024-01-20 17:00:00Z   a1b2c3d4-0001-0001-0001-000000000005  export-2024-01.csv
+Summary
+-------
+  Mount Path      Client Type  Count
+  ----------      -----------  -----
+  auth/approle/   entity           3
+                  subtotal:        3
 
-Total records: 5
-  entity:        3
-  non-entity:    2
-  acme:          1
-  secret-sync:   1
+  auth/ldap/      non-entity       1
+                  subtotal:        1
+
+  auth/userpass/  non-entity       1
+                  subtotal:        1
+
+  pki/            acme             1
+                  subtotal:        1
+  ----------      -----------  -----
+                  TOTAL:           6
+```
+
+With `-p`, two summaries are printed — one for non-PKI clients and one for PKI
+(`auth_method=cert`) clients:
+
+```
+Non-PKI Client Summary
+----------------------
+  Mount Path      Client Type  Count
+  ...
+
+PKI Client Summary
+------------------
+  Mount Path      Client Type  Count
+  ...
 ```
 
 ## CSV Format

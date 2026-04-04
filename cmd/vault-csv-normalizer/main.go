@@ -28,7 +28,7 @@ func main() {
 	var noDedup bool
 	var showHelp bool
 
-	flag.Var(&inputFiles, "f", "Path to a Vault client export CSV file. May be specified multiple times.")
+	flag.Var(&inputFiles, "f", "One or more Vault client export CSV files. May be specified multiple times or followed by multiple paths.")
 	flag.StringVar(&sortBy, "sort", "namespace_path", "Column to sort by: namespace_path, client_type, token_creation_time, client_first_usage_time, mount_accessor")
 	flag.StringVar(&filterNS, "namespace", "", "Filter rows by namespace path (substring match)")
 	flag.StringVar(&filterType, "type", "", "Filter rows by client type: entity, non-entity, acme, secret-sync")
@@ -36,6 +36,7 @@ func main() {
 	flag.BoolVar(&noDedup, "d", false, "Disable deduplication (count duplicate client IDs separately)")
 	flag.BoolVar(&showHelp, "help", false, "Show usage information")
 	flag.Parse()
+	inputFiles = append(inputFiles, flag.Args()...)
 
 	if showHelp || len(inputFiles) == 0 {
 		printUsage()
@@ -91,7 +92,8 @@ func printUsage() {
 	fmt.Println(`vault-csv-normalizer — normalize and display Vault client export CSVs
 
 USAGE:
-  vault-csv-normalizer -f <file1.csv> [-f <file2.csv> ...] [options]
+  vault-csv-normalizer -f <file1.csv> [file2.csv ...] [options]
+  vault-csv-normalizer -f <file1.csv> -f <file2.csv> [options]
 
 OPTIONS:`)
 	flag.PrintDefaults()
@@ -100,8 +102,11 @@ EXAMPLES:
   # Single file
   vault-csv-normalizer -f export-2024-01.csv
 
-  # Multiple files, sorted by client type
-  vault-csv-normalizer -f jan.csv -f feb.csv -f mar.csv --sort client_type
+  # Multiple files after one -f flag
+  vault-csv-normalizer -f jan.csv feb.csv mar.csv --sort client_type
+
+  # Multiple files with repeated -f flags
+  vault-csv-normalizer -f jan.csv -f feb.csv -f mar.csv
 
   # Filter to a specific namespace
   vault-csv-normalizer -f export.csv --namespace education/
@@ -113,7 +118,7 @@ EXAMPLES:
   vault-csv-normalizer -f export.csv -p
 
   # PKI report across multiple months
-  vault-csv-normalizer -f jan.csv -f feb.csv -p
+  vault-csv-normalizer -f jan.csv feb.csv -p
 
 CSV FORMAT (Vault activity export):
   Expected columns (order-independent, case-insensitive):
