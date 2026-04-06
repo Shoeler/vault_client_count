@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/vault-csv-normalizer/internal/normalizer"
 	"github.com/vault-csv-normalizer/internal/parser"
@@ -27,6 +28,7 @@ func main() {
 	var countPKI bool
 	var noDedup bool
 	var debugMode bool
+	var perFile bool
 	var showHelp bool
 
 	flag.Var(&inputFiles, "f", "One or more Vault client export CSV files. May be specified multiple times or followed by multiple paths.")
@@ -36,6 +38,7 @@ func main() {
 	flag.BoolVar(&countPKI, "p", false, "Partition and report PKI clients (auth_method=cert) separately from non-PKI clients")
 	flag.BoolVar(&noDedup, "d", false, "Disable deduplication (count duplicate client IDs separately)")
 	flag.BoolVar(&debugMode, "debug", false, "Print a table of all records with no mount path")
+	flag.BoolVar(&perFile, "per-file", false, "Print a summary for each input file before the combined summary")
 	flag.BoolVar(&showHelp, "help", false, "Show usage information")
 	flag.Parse()
 	inputFiles = append(inputFiles, flag.Args()...)
@@ -92,6 +95,25 @@ func main() {
 		fmt.Fprintln(os.Stdout, "==================================")
 		renderer.PrintTable(os.Stdout, noMount)
 		fmt.Fprintln(os.Stdout)
+	}
+
+	if perFile {
+		for _, path := range inputFiles {
+			label := filepath.Base(path)
+			var fileRecords []normalizer.Record
+			for _, r := range normalized {
+				if r.Source == path {
+					fileRecords = append(fileRecords, r)
+				}
+			}
+			if countPKI {
+				pki, nonPKI := normalizer.PartitionPKI(fileRecords)
+				renderer.PrintSummary(os.Stdout, nonPKI, label+" — Non-PKI")
+				renderer.PrintSummary(os.Stdout, pki, label+" — PKI")
+			} else {
+				renderer.PrintSummary(os.Stdout, fileRecords, label)
+			}
+		}
 	}
 
 	if countPKI {
