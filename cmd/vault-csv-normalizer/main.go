@@ -26,6 +26,7 @@ func main() {
 	var filterType string
 	var countPKI bool
 	var noDedup bool
+	var debugMode bool
 	var showHelp bool
 
 	flag.Var(&inputFiles, "f", "One or more Vault client export CSV files. May be specified multiple times or followed by multiple paths.")
@@ -34,6 +35,7 @@ func main() {
 	flag.StringVar(&filterType, "type", "", "Filter rows by client type: entity, non-entity, acme, secret-sync")
 	flag.BoolVar(&countPKI, "p", false, "Partition and report PKI clients (auth_method=cert) separately from non-PKI clients")
 	flag.BoolVar(&noDedup, "d", false, "Disable deduplication (count duplicate client IDs separately)")
+	flag.BoolVar(&debugMode, "debug", false, "Print a table of all records with no mount path")
 	flag.BoolVar(&showHelp, "help", false, "Show usage information")
 	flag.Parse()
 	inputFiles = append(inputFiles, flag.Args()...)
@@ -77,6 +79,19 @@ func main() {
 	if err := normalizer.Sort(normalized, sortBy); err != nil {
 		fmt.Fprintf(os.Stderr, "sort error: %v\n", err)
 		os.Exit(1)
+	}
+
+	if debugMode {
+		var noMount []normalizer.Record
+		for _, r := range normalized {
+			if r.MountPath == "" {
+				noMount = append(noMount, r)
+			}
+		}
+		fmt.Fprintf(os.Stdout, "Debug: (no mount) records (%d)\n", len(noMount))
+		fmt.Fprintln(os.Stdout, "==================================")
+		renderer.PrintTable(os.Stdout, noMount)
+		fmt.Fprintln(os.Stdout)
 	}
 
 	if countPKI {

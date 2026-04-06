@@ -1,6 +1,7 @@
 package normalizer
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -136,6 +137,38 @@ func TestFilterByClientType(t *testing.T) {
 	filtered := FilterByClientType(records, "entity")
 	if len(filtered) != 2 {
 		t.Errorf("expected 2 entity records, got %d", len(filtered))
+	}
+}
+
+func TestDeduplicate_PrefersNonEmptyMount(t *testing.T) {
+	records := []Record{
+		{ClientID: "abc", MountPath: ""},
+		{ClientID: "abc", MountPath: "auth/ldap/"},
+		{ClientID: "xyz", MountPath: "auth/approle/"},
+		{ClientID: "xyz", MountPath: ""},
+	}
+	out := Deduplicate(records)
+	if len(out) != 2 {
+		t.Fatalf("expected 2 records after dedup, got %d", len(out))
+	}
+	for _, r := range out {
+		if r.MountPath == "" {
+			t.Errorf("client %q kept empty-mount record when a non-empty mount was available", r.ClientID)
+		}
+	}
+}
+
+func TestDeduplicate_KeepsFirstWhenBothEmpty(t *testing.T) {
+	records := []Record{
+		{ClientID: "abc", MountPath: "", AuthMethod: "first"},
+		{ClientID: "abc", MountPath: "", AuthMethod: "second"},
+	}
+	out := Deduplicate(records)
+	if len(out) != 1 {
+		t.Fatalf("expected 1 record, got %d", len(out))
+	}
+	if out[0].AuthMethod != "first" {
+		t.Errorf("expected first occurrence to be kept, got AuthMethod=%q", out[0].AuthMethod)
 	}
 }
 

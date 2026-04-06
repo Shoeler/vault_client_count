@@ -211,7 +211,7 @@ func TestPrintPKIReport_WithPKI(t *testing.T) {
 	if !strings.Contains(out, "PKI Client Summary") {
 		t.Error("expected PKI Client Summary section")
 	}
-	if !strings.Contains(out, "Total clients:") {
+	if !strings.Contains(out, "TOTAL:") {
 		t.Error("expected total count in PKI summary")
 	}
 }

@@ -152,17 +152,23 @@ func parseTime(raw string) time.Time {
 	return time.Time{} // unparseable → zero value
 }
 
-// Deduplicate removes records with duplicate ClientIDs, keeping the first
-// occurrence across all input files.
+// Deduplicate removes records with duplicate ClientIDs. When duplicates exist,
+// the record with a non-empty MountPath is preferred over one with an empty
+// MountPath; otherwise the first occurrence is kept.
 func Deduplicate(records []Record) []Record {
-	seen := make(map[string]struct{}, len(records))
-	out := records[:0:0]
+	index := make(map[string]int, len(records)) // client_id → position in out
+	out := make([]Record, 0, len(records))
 	for _, r := range records {
-		if _, dup := seen[r.ClientID]; dup {
+		i, seen := index[r.ClientID]
+		if !seen {
+			index[r.ClientID] = len(out)
+			out = append(out, r)
 			continue
 		}
-		seen[r.ClientID] = struct{}{}
-		out = append(out, r)
+		// Upgrade an empty-mount record if we now have a real mount path.
+		if out[i].MountPath == "" && r.MountPath != "" {
+			out[i] = r
+		}
 	}
 	return out
 }
