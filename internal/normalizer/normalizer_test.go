@@ -1,7 +1,6 @@
 package normalizer
 
 import (
-	"strings"
 	"testing"
 	"time"
 
@@ -34,8 +33,8 @@ func TestNormalizeClientType(t *testing.T) {
 		{"non_entity", "non-entity"},
 		{"Non-Entity Client", "non-entity"},
 		{"acme", "acme"},
-		{"certificate", "acme"},
-		{"cert", "acme"},
+		{"certificate", "certificate"}, // passthrough — not an acme alias
+		{"cert", "cert"},               // passthrough — not an acme alias
 		{"secret-sync", "secret-sync"},
 		{"secret_sync", "secret-sync"},
 		{"secrets sync", "secret-sync"},
@@ -197,56 +196,57 @@ func TestSort_UnknownKey(t *testing.T) {
 
 func TestIsPKIClient(t *testing.T) {
 	cases := []struct {
-		mountAccessor string
-		want          bool
+		clientType string
+		want       bool
 	}{
-		{"auth_cert_abc123", true},
-		{"auth_cert_", true},        // bare prefix still matches
-		{"AUTH_CERT_xyz", true},     // case-insensitive
-		{"Auth_Cert_Mixed", true},   // mixed case
-		{"auth_approle_abc", false},
-		{"auth_ldap_xyz", false},
-		{"cert_auth_abc", false},    // prefix in wrong position
+		{"acme", true},
+		{"entity", false},
+		{"non-entity", false},
+		{"secret-sync", false},
 		{"", false},
 	}
 	for _, c := range cases {
-		r := Record{MountAccessor: c.mountAccessor}
+		r := Record{ClientType: c.clientType}
 		got := IsPKIClient(r)
 		if got != c.want {
-			t.Errorf("IsPKIClient(MountAccessor=%q) = %v, want %v", c.mountAccessor, got, c.want)
+			t.Errorf("IsPKIClient(ClientType=%q) = %v, want %v", c.clientType, got, c.want)
 		}
 	}
 }
 
-func TestIsPKIClient_NormalizationRoundtrip(t *testing.T) {
-	// MountAccessor is preserved as-is by Normalize; IsPKIClient lowercases internally.
-	raw := []parser.RawRecord{
-		{ClientID: "pki-001", MountAccessor: "auth_cert_internal", ClientType: "entity"},
-		{ClientID: "pki-002", MountAccessor: "AUTH_CERT_PROD", ClientType: "entity"},
-		{ClientID: "other-001", MountAccessor: "auth_approle_web", ClientType: "entity"},
+func TestIsPKIClientByAccessor(t *testing.T) {
+	cases := []struct {
+		mountAccessor string
+		want          bool
+	}{
+		{"auth_cert_abc123", true},
+		{"auth_cert_", true},
+		{"AUTH_CERT_xyz", true},
+		{"Auth_Cert_Mixed", true},
+		{"auth_approle_abc", false},
+		{"auth_ldap_xyz", false},
+		{"cert_auth_abc", false},
+		{"", false},
 	}
-	records := Normalize(raw)
-	if !IsPKIClient(records[0]) {
-		t.Error("expected auth_cert_internal to be recognized as PKI after normalization")
-	}
-	if !IsPKIClient(records[1]) {
-		t.Error("expected AUTH_CERT_PROD to be recognized as PKI after normalization")
-	}
-	if IsPKIClient(records[2]) {
-		t.Error("expected auth_approle_web to NOT be recognized as PKI")
+	for _, c := range cases {
+		r := Record{MountAccessor: c.mountAccessor}
+		got := IsPKIClientByAccessor(r)
+		if got != c.want {
+			t.Errorf("IsPKIClientByAccessor(MountAccessor=%q) = %v, want %v", c.mountAccessor, got, c.want)
+		}
 	}
 }
 
 func TestPartitionPKI(t *testing.T) {
 	records := []Record{
-		{ClientID: "e1", MountAccessor: "auth_approle_web", ClientType: "entity"},
-		{ClientID: "p1", MountAccessor: "auth_cert_internal", ClientType: "entity"},
-		{ClientID: "e2", MountAccessor: "auth_ldap_corp", ClientType: "non-entity"},
-		{ClientID: "p2", MountAccessor: "auth_cert_prod", ClientType: "entity"},
-		{ClientID: "e3", MountAccessor: "auth_oidc_okta", ClientType: "entity"},
+		{ClientID: "e1", ClientType: "entity"},
+		{ClientID: "p1", ClientType: "acme"},
+		{ClientID: "e2", ClientType: "non-entity"},
+		{ClientID: "p2", ClientType: "acme"},
+		{ClientID: "e3", ClientType: "entity"},
 	}
 
-	pki, nonPKI := PartitionPKI(records)
+	pki, nonPKI := PartitionPKI(records, IsPKIClient)
 
 	if len(pki) != 2 {
 		t.Errorf("expected 2 PKI records, got %d", len(pki))
@@ -255,23 +255,23 @@ func TestPartitionPKI(t *testing.T) {
 		t.Errorf("expected 3 non-PKI records, got %d", len(nonPKI))
 	}
 	for _, r := range pki {
-		if !strings.HasPrefix(strings.ToLower(r.MountAccessor), "auth_cert") {
-			t.Errorf("PKI partition contains non-cert record: %s (accessor: %s)", r.ClientID, r.MountAccessor)
+		if r.ClientType != "acme" {
+			t.Errorf("PKI partition contains non-acme record: %s (type: %s)", r.ClientID, r.ClientType)
 		}
 	}
 	for _, r := range nonPKI {
-		if strings.HasPrefix(strings.ToLower(r.MountAccessor), "auth_cert") {
-			t.Errorf("non-PKI partition contains cert record: %s (accessor: %s)", r.ClientID, r.MountAccessor)
+		if r.ClientType == "acme" {
+			t.Errorf("non-PKI partition contains acme record: %s", r.ClientID)
 		}
 	}
 }
 
 func TestPartitionPKI_AllPKI(t *testing.T) {
 	records := []Record{
-		{ClientID: "p1", MountAccessor: "auth_cert_a"},
-		{ClientID: "p2", MountAccessor: "auth_cert_b"},
+		{ClientID: "p1", ClientType: "acme"},
+		{ClientID: "p2", ClientType: "acme"},
 	}
-	pki, nonPKI := PartitionPKI(records)
+	pki, nonPKI := PartitionPKI(records, IsPKIClient)
 	if len(pki) != 2 {
 		t.Errorf("expected 2 PKI, got %d", len(pki))
 	}
@@ -282,10 +282,10 @@ func TestPartitionPKI_AllPKI(t *testing.T) {
 
 func TestPartitionPKI_NoPKI(t *testing.T) {
 	records := []Record{
-		{ClientID: "e1", MountAccessor: "auth_approle_abc"},
-		{ClientID: "e2", MountAccessor: "auth_ldap_xyz"},
+		{ClientID: "e1", ClientType: "entity"},
+		{ClientID: "e2", ClientType: "non-entity"},
 	}
-	pki, nonPKI := PartitionPKI(records)
+	pki, nonPKI := PartitionPKI(records, IsPKIClient)
 	if len(pki) != 0 {
 		t.Errorf("expected 0 PKI, got %d", len(pki))
 	}
@@ -294,8 +294,23 @@ func TestPartitionPKI_NoPKI(t *testing.T) {
 	}
 }
 
+func TestPartitionPKI_LegacyByAccessor(t *testing.T) {
+	records := []Record{
+		{ClientID: "e1", MountAccessor: "auth_approle_web", ClientType: "entity"},
+		{ClientID: "c1", MountAccessor: "auth_cert_internal", ClientType: "entity"},
+		{ClientID: "c2", MountAccessor: "auth_cert_prod", ClientType: "non-entity"},
+	}
+	pki, nonPKI := PartitionPKI(records, IsPKIClientByAccessor)
+	if len(pki) != 2 {
+		t.Errorf("expected 2 legacy PKI, got %d", len(pki))
+	}
+	if len(nonPKI) != 1 {
+		t.Errorf("expected 1 non-PKI, got %d", len(nonPKI))
+	}
+}
+
 func TestPartitionPKI_Empty(t *testing.T) {
-	pki, nonPKI := PartitionPKI(nil)
+	pki, nonPKI := PartitionPKI(nil, IsPKIClient)
 	if pki != nil || nonPKI != nil {
 		t.Error("expected nil slices for empty input")
 	}

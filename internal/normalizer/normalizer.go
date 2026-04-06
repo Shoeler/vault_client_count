@@ -107,8 +107,6 @@ var clientTypeAliases = map[string]string{
 	"nonentity":                  "non-entity",
 	"acme":                       "acme",
 	"acme client":                "acme",
-	"certificate":                "acme",
-	"cert":                       "acme",
 	"secret-sync":                "secret-sync",
 	"secret_sync":                "secret-sync",
 	"secretsync":                 "secret-sync",
@@ -173,19 +171,24 @@ func Deduplicate(records []Record) []Record {
 	return out
 }
 
-// IsPKIClient reports whether r is a PKI client, defined as any record whose
-// mount_accessor starts with "auth_cert" (case-insensitive). The prefix check
-// is done on the raw MountAccessor value since it is not lowercased during
-// normalization.
+// IsPKIClient reports whether r is a PKI/ACME client, identified by
+// client_type == "acme" as set by Vault's activity export.
 func IsPKIClient(r Record) bool {
+	return r.ClientType == "acme"
+}
+
+// IsPKIClientByAccessor is the legacy detection method: any record whose
+// mount_accessor starts with "auth_cert". This identifies cert auth method
+// clients rather than true PKI/ACME clients and is kept for compatibility.
+func IsPKIClientByAccessor(r Record) bool {
 	return strings.HasPrefix(strings.ToLower(r.MountAccessor), "auth_cert")
 }
 
-// PartitionPKI splits records into two slices: PKI clients and non-PKI clients.
+// PartitionPKI splits records into two slices using the provided predicate.
 // The original slice is not modified.
-func PartitionPKI(records []Record) (pki, nonPKI []Record) {
+func PartitionPKI(records []Record, isPKI func(Record) bool) (pki, nonPKI []Record) {
 	for _, r := range records {
-		if IsPKIClient(r) {
+		if isPKI(r) {
 			pki = append(pki, r)
 		} else {
 			nonPKI = append(nonPKI, r)
