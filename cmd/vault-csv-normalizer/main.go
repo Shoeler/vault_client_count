@@ -26,7 +26,6 @@ func main() {
 	var filterNS string
 	var filterType string
 	var countPKI bool
-	var legacyPKI bool
 	var noDedup bool
 	var debugMode bool
 	var perFile bool
@@ -36,8 +35,7 @@ func main() {
 	flag.StringVar(&sortBy, "sort", "namespace_path", "Column to sort by: namespace_path, client_type, token_creation_time, client_first_usage_time, mount_accessor")
 	flag.StringVar(&filterNS, "namespace", "", "Filter rows by namespace path (substring match)")
 	flag.StringVar(&filterType, "type", "", "Filter rows by client type: entity, non-entity, acme, secret-sync")
-	flag.BoolVar(&countPKI, "p", false, "Partition and report PKI/ACME clients (client_type=acme) separately from non-PKI clients")
-	flag.BoolVar(&legacyPKI, "legacy-pki", false, "Use legacy PKI detection: match mount_accessor prefix 'auth_cert' instead of client_type=acme")
+	flag.BoolVar(&countPKI, "p", false, "Partition and report PKI/cert clients (client_type=acme or mount_accessor prefix auth_cert) separately")
 	flag.BoolVar(&noDedup, "d", false, "Disable deduplication (count duplicate client IDs separately)")
 	flag.BoolVar(&debugMode, "debug", false, "Print a table of all records with no mount path")
 	flag.BoolVar(&perFile, "per-file", false, "Print a summary for each input file before the combined summary")
@@ -99,11 +97,6 @@ func main() {
 		fmt.Fprintln(os.Stdout)
 	}
 
-	pkiPredicate := normalizer.IsPKIClient
-	if legacyPKI {
-		pkiPredicate = normalizer.IsPKIClientByAccessor
-	}
-
 	if perFile {
 		for _, path := range inputFiles {
 			label := filepath.Base(path)
@@ -114,7 +107,7 @@ func main() {
 				}
 			}
 			if countPKI {
-				pki, nonPKI := normalizer.PartitionPKI(fileRecords, pkiPredicate)
+				pki, nonPKI := normalizer.PartitionPKI(fileRecords, normalizer.IsPKIClient)
 				renderer.PrintSummary(os.Stdout, nonPKI, label+" — Non-PKI")
 				renderer.PrintSummary(os.Stdout, pki, label+" — PKI")
 			} else {
@@ -124,7 +117,7 @@ func main() {
 	}
 
 	if countPKI {
-		pkiRecords, nonPKIRecords := normalizer.PartitionPKI(normalized, pkiPredicate)
+		pkiRecords, nonPKIRecords := normalizer.PartitionPKI(normalized, normalizer.IsPKIClient)
 		renderer.PrintSummary(os.Stdout, nonPKIRecords, "Non-PKI Client Summary")
 		renderer.PrintSummary(os.Stdout, pkiRecords, "PKI Client Summary")
 	} else {

@@ -196,54 +196,42 @@ func TestSort_UnknownKey(t *testing.T) {
 
 func TestIsPKIClient(t *testing.T) {
 	cases := []struct {
-		clientType string
-		want       bool
-	}{
-		{"acme", true},
-		{"entity", false},
-		{"non-entity", false},
-		{"secret-sync", false},
-		{"", false},
-	}
-	for _, c := range cases {
-		r := Record{ClientType: c.clientType}
-		got := IsPKIClient(r)
-		if got != c.want {
-			t.Errorf("IsPKIClient(ClientType=%q) = %v, want %v", c.clientType, got, c.want)
-		}
-	}
-}
-
-func TestIsPKIClientByAccessor(t *testing.T) {
-	cases := []struct {
+		clientType    string
 		mountAccessor string
 		want          bool
 	}{
-		{"auth_cert_abc123", true},
-		{"auth_cert_", true},
-		{"AUTH_CERT_xyz", true},
-		{"Auth_Cert_Mixed", true},
-		{"auth_approle_abc", false},
-		{"auth_ldap_xyz", false},
-		{"cert_auth_abc", false},
-		{"", false},
+		// ACME clients detected by client_type
+		{"acme", "", true},
+		{"acme", "pki_abc123", true},
+		// Cert auth clients detected by mount_accessor prefix
+		{"entity", "auth_cert_internal", true},
+		{"non-entity", "auth_cert_prod", true},
+		{"entity", "AUTH_CERT_xyz", true},
+		// Non-PKI clients
+		{"entity", "auth_approle_abc", false},
+		{"non-entity", "auth_ldap_xyz", false},
+		{"secret-sync", "", false},
+		{"", "", false},
 	}
 	for _, c := range cases {
-		r := Record{MountAccessor: c.mountAccessor}
-		got := IsPKIClientByAccessor(r)
+		r := Record{ClientType: c.clientType, MountAccessor: c.mountAccessor}
+		got := IsPKIClient(r)
 		if got != c.want {
-			t.Errorf("IsPKIClientByAccessor(MountAccessor=%q) = %v, want %v", c.mountAccessor, got, c.want)
+			t.Errorf("IsPKIClient(ClientType=%q, MountAccessor=%q) = %v, want %v",
+				c.clientType, c.mountAccessor, got, c.want)
 		}
 	}
 }
 
 func TestPartitionPKI(t *testing.T) {
+	// Mix of acme clients (PKI engine), cert auth clients (auth_cert accessor),
+	// and regular entity/non-entity clients.
 	records := []Record{
-		{ClientID: "e1", ClientType: "entity"},
-		{ClientID: "p1", ClientType: "acme"},
-		{ClientID: "e2", ClientType: "non-entity"},
-		{ClientID: "p2", ClientType: "acme"},
-		{ClientID: "e3", ClientType: "entity"},
+		{ClientID: "e1", ClientType: "entity", MountAccessor: "auth_approle_web"},
+		{ClientID: "p1", ClientType: "acme", MountAccessor: "pki_abc123"},
+		{ClientID: "e2", ClientType: "non-entity", MountAccessor: "auth_ldap_corp"},
+		{ClientID: "p2", ClientType: "entity", MountAccessor: "auth_cert_internal"},
+		{ClientID: "e3", ClientType: "entity", MountAccessor: "auth_oidc_okta"},
 	}
 
 	pki, nonPKI := PartitionPKI(records, IsPKIClient)
@@ -254,14 +242,42 @@ func TestPartitionPKI(t *testing.T) {
 	if len(nonPKI) != 3 {
 		t.Errorf("expected 3 non-PKI records, got %d", len(nonPKI))
 	}
+
+	pkiIDs := map[string]bool{"p1": true, "p2": true}
 	for _, r := range pki {
-		if r.ClientType != "acme" {
-			t.Errorf("PKI partition contains non-acme record: %s (type: %s)", r.ClientID, r.ClientType)
+		if !pkiIDs[r.ClientID] {
+			t.Errorf("unexpected client in PKI partition: %s", r.ClientID)
 		}
 	}
+	nonPKIIDs := map[string]bool{"e1": true, "e2": true, "e3": true}
 	for _, r := range nonPKI {
-		if r.ClientType == "acme" {
-			t.Errorf("non-PKI partition contains acme record: %s", r.ClientID)
+		if !nonPKIIDs[r.ClientID] {
+			t.Errorf("unexpected client in non-PKI partition: %s", r.ClientID)
+		}
+	}
+}
+
+// Regression test: cert auth clients (client_type=entity/non-entity with an
+// auth_cert mount_accessor) must not be lumped into the non-PKI partition.
+// This broke when IsPKIClient was changed to only check client_type=acme.
+func TestPartitionPKI_CertAuthClientsArePKI(t *testing.T) {
+	records := []Record{
+		{ClientID: "cert-entity", ClientType: "entity", MountAccessor: "auth_cert_internal"},
+		{ClientID: "cert-nonentity", ClientType: "non-entity", MountAccessor: "auth_cert_prod"},
+		{ClientID: "regular", ClientType: "entity", MountAccessor: "auth_approle_web"},
+	}
+
+	pki, nonPKI := PartitionPKI(records, IsPKIClient)
+
+	if len(pki) != 2 {
+		t.Errorf("expected 2 PKI records (cert auth clients), got %d — cert auth clients are being incorrectly lumped into non-PKI", len(pki))
+	}
+	if len(nonPKI) != 1 {
+		t.Errorf("expected 1 non-PKI record, got %d", len(nonPKI))
+	}
+	for _, r := range pki {
+		if r.ClientID == "regular" {
+			t.Error("non-cert client ended up in PKI partition")
 		}
 	}
 }
@@ -294,20 +310,6 @@ func TestPartitionPKI_NoPKI(t *testing.T) {
 	}
 }
 
-func TestPartitionPKI_LegacyByAccessor(t *testing.T) {
-	records := []Record{
-		{ClientID: "e1", MountAccessor: "auth_approle_web", ClientType: "entity"},
-		{ClientID: "c1", MountAccessor: "auth_cert_internal", ClientType: "entity"},
-		{ClientID: "c2", MountAccessor: "auth_cert_prod", ClientType: "non-entity"},
-	}
-	pki, nonPKI := PartitionPKI(records, IsPKIClientByAccessor)
-	if len(pki) != 2 {
-		t.Errorf("expected 2 legacy PKI, got %d", len(pki))
-	}
-	if len(nonPKI) != 1 {
-		t.Errorf("expected 1 non-PKI, got %d", len(nonPKI))
-	}
-}
 
 func TestPartitionPKI_Empty(t *testing.T) {
 	pki, nonPKI := PartitionPKI(nil, IsPKIClient)

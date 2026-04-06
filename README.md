@@ -22,7 +22,7 @@ versions), and displays a summary of client counts by mount path and type.
 - **Filters** by namespace (substring) or client type
 - **Sorts** by any column
 - Prints a **summary** with counts broken down by mount path and client type
-- Optionally **partitions ACME/PKI clients** (`-p`) into a separate summary, identified by `client_type=acme`
+- Optionally **partitions PKI/cert clients** (`-p`) into a separate summary, identified by `client_type=acme` or `mount_accessor` prefix `auth_cert`
 - Skips blank/summary rows (rows with no `client_id`) silently
 
 ## Installation
@@ -54,10 +54,10 @@ OPTIONS:
         Filter rows by namespace path (substring match)
   -type string
         Filter rows by client type: entity, non-entity, acme, secret-sync
-  -p    Partition and report ACME/PKI clients (client_type=acme) separately
-  -legacy-pki
-        Use legacy PKI detection: match mount_accessor prefix 'auth_cert'
-        instead of client_type=acme (for older Vault exports)
+  -p    Partition and report PKI/cert clients separately.
+        A client is considered PKI if client_type=acme (ACME protocol clients
+        from the PKI secrets engine) OR mount_accessor starts with auth_cert
+        (cert auth method clients). Both types are reported together as "PKI".
   -d    Disable deduplication (count duplicate client IDs separately)
   -per-file
         Print a summary for each input file before the combined summary
@@ -91,11 +91,8 @@ vault-csv-normalizer -f export.csv --type entity
 # Partition PKI clients into a separate summary
 vault-csv-normalizer -f export.csv -p
 
-# PKI/ACME report across multiple months
+# PKI/cert report across multiple months
 vault-csv-normalizer -f jan.csv feb.csv -p
-
-# Use legacy PKI detection (older Vault exports)
-vault-csv-normalizer -f export.csv -p -legacy-pki
 
 # Per-file breakdown before the combined summary
 vault-csv-normalizer -f jan.csv feb.csv --per-file
@@ -133,8 +130,7 @@ Summary
 ```
 
 With `-p`, two summaries are printed — one for non-PKI clients and one for
-ACME/PKI clients (`client_type=acme`). Use `-legacy-pki` to instead identify
-PKI clients by `mount_accessor` prefix `auth_cert` (for older Vault exports):
+PKI/cert clients (matched by `client_type=acme` or `mount_accessor` prefix `auth_cert`):
 
 ```
 Non-PKI Client Summary

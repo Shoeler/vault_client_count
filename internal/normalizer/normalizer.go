@@ -171,17 +171,12 @@ func Deduplicate(records []Record) []Record {
 	return out
 }
 
-// IsPKIClient reports whether r is a PKI/ACME client, identified by
-// client_type == "acme" as set by Vault's activity export.
+// IsPKIClient reports whether r is a PKI/cert client. It matches on either:
+//   - client_type == "acme" (ACME protocol clients from the PKI secrets engine), or
+//   - mount_accessor starting with "auth_cert" (cert auth method clients)
 func IsPKIClient(r Record) bool {
-	return r.ClientType == "acme"
-}
-
-// IsPKIClientByAccessor is the legacy detection method: any record whose
-// mount_accessor starts with "auth_cert". This identifies cert auth method
-// clients rather than true PKI/ACME clients and is kept for compatibility.
-func IsPKIClientByAccessor(r Record) bool {
-	return strings.HasPrefix(strings.ToLower(r.MountAccessor), "auth_cert")
+	return r.ClientType == "acme" ||
+		strings.HasPrefix(strings.ToLower(r.MountAccessor), "auth_cert")
 }
 
 // PartitionPKI splits records into two slices using the provided predicate.
