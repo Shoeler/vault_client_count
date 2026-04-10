@@ -104,6 +104,41 @@ alt-001,finance/,non_entity,2024-03-01T00:00:00Z
 	assertEqual(t, "client_type", "non_entity", records[0].ClientType)
 }
 
+func TestParseReader_EntityAliasName(t *testing.T) {
+	csv := `client_id,namespace_path,client_type,entity_alias_name
+id-001,[root],entity,alice@corp.com
+id-002,[root],entity,bob-v2
+id-003,[root],non-entity,
+`
+	records, err := parseReader(strings.NewReader(csv), "test.csv")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(records) != 3 {
+		t.Fatalf("expected 3 records, got %d", len(records))
+	}
+	assertEqual(t, "entity_alias_name[0]", "alice@corp.com", records[0].EntityAliasName)
+	assertEqual(t, "entity_alias_name[1]", "bob-v2", records[1].EntityAliasName)
+	assertEqual(t, "entity_alias_name[2]", "", records[2].EntityAliasName)
+}
+
+func TestParseReader_EntityAliasNameAliasColumns(t *testing.T) {
+	// alias_name and entity_alias are accepted as column name variants
+	for _, colName := range []string{"alias_name", "entity_alias"} {
+		csv := "client_id," + colName + "\nid-001,alice-1\n"
+		records, err := parseReader(strings.NewReader(csv), "test.csv")
+		if err != nil {
+			t.Fatalf("col %q: unexpected error: %v", colName, err)
+		}
+		if len(records) != 1 {
+			t.Fatalf("col %q: expected 1 record, got %d", colName, len(records))
+		}
+		if records[0].EntityAliasName != "alice-1" {
+			t.Errorf("col %q: EntityAliasName = %q, want %q", colName, records[0].EntityAliasName, "alice-1")
+		}
+	}
+}
+
 func assertEqual(t *testing.T, field, want, got string) {
 	t.Helper()
 	if want != got {

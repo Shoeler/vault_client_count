@@ -171,6 +171,138 @@ func TestDeduplicate_KeepsFirstWhenBothEmpty(t *testing.T) {
 	}
 }
 
+func TestFilterSince(t *testing.T) {
+	records := []Record{
+		{ClientID: "old", TokenCreationTime: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)},
+		{ClientID: "boundary", TokenCreationTime: time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC)},
+		{ClientID: "new", TokenCreationTime: time.Date(2024, 12, 1, 0, 0, 0, 0, time.UTC)},
+		{ClientID: "unknown", TokenCreationTime: time.Time{}}, // zero — always kept
+	}
+	since := time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC)
+	out := FilterSince(records, since)
+
+	ids := make(map[string]bool, len(out))
+	for _, r := range out {
+		ids[r.ClientID] = true
+	}
+	if ids["old"] {
+		t.Error("expected 'old' to be filtered out")
+	}
+	if !ids["boundary"] {
+		t.Error("expected 'boundary' (exactly at since) to be kept")
+	}
+	if !ids["new"] {
+		t.Error("expected 'new' to be kept")
+	}
+	if !ids["unknown"] {
+		t.Error("expected 'unknown' (zero time) to be kept")
+	}
+}
+
+func TestParseTime_Formats(t *testing.T) {
+	cases := []struct {
+		in   string
+		want time.Time
+	}{
+		{"2024-06-15", time.Date(2024, 6, 15, 0, 0, 0, 0, time.UTC)},
+		{"2024-06-15T10:30:00Z", time.Date(2024, 6, 15, 10, 30, 0, 0, time.UTC)},
+		{"06/15/2024", time.Date(2024, 6, 15, 0, 0, 0, 0, time.UTC)},
+		{"", time.Time{}},
+		{"N/A", time.Time{}},
+		{"not-a-date", time.Time{}},
+	}
+	for _, c := range cases {
+		got := ParseTime(c.in)
+		if !got.Equal(c.want) {
+			t.Errorf("ParseTime(%q) = %v, want %v", c.in, got, c.want)
+		}
+	}
+}
+
+func TestBaseAlias(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"abc-123", "abc"},
+		{"abc@234", "abc"},
+		{"alice@corp.com", "alice"},
+		{"user-v2-extra", "user"},
+		{"plain", "plain"},
+		{"", ""},
+		{"-leading", ""},
+		{"@leading", ""},
+	}
+	for _, c := range cases {
+		got := BaseAlias(c.in)
+		if got != c.want {
+			t.Errorf("BaseAlias(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestDeduplicateByAlias_CollapsesSameBase(t *testing.T) {
+	records := []Record{
+		{ClientID: "1", EntityAliasName: "abc-123"},
+		{ClientID: "2", EntityAliasName: "abc@234"}, // same base "abc" — duplicate
+		{ClientID: "3", EntityAliasName: "xyz-001"},
+		{ClientID: "4", EntityAliasName: ""},        // blank — always kept
+		{ClientID: "5", EntityAliasName: "abc-999"}, // also "abc" — duplicate
+	}
+	out := DeduplicateByAlias(records)
+	if len(out) != 3 {
+		t.Fatalf("expected 3 records (abc, xyz, blank), got %d", len(out))
+	}
+	// First abc-* wins.
+	if out[0].ClientID != "1" {
+		t.Errorf("expected first abc record (ClientID=1), got %s", out[0].ClientID)
+	}
+}
+
+func TestDeduplicateByAlias_KeepsAllBlanks(t *testing.T) {
+	records := []Record{
+		{ClientID: "1", EntityAliasName: ""},
+		{ClientID: "2", EntityAliasName: ""},
+		{ClientID: "3", EntityAliasName: "x-1"},
+	}
+	out := DeduplicateByAlias(records)
+	if len(out) != 3 {
+		t.Fatalf("expected 3 records (2 blanks + 1 aliased), got %d", len(out))
+	}
+}
+
+func TestFindAliasDuplicates(t *testing.T) {
+	records := []Record{
+		{ClientID: "1", EntityAliasName: "abc-123"},
+		{ClientID: "2", EntityAliasName: "abc@234"},  // same base as 1
+		{ClientID: "3", EntityAliasName: "xyz-001"},  // unique
+		{ClientID: "4", EntityAliasName: ""},         // ignored
+		{ClientID: "5", EntityAliasName: "abc-999"},  // third in abc group
+		{ClientID: "6", EntityAliasName: "foo@bar"},  // unique base "foo"
+	}
+	groups := FindAliasDuplicates(records)
+	if len(groups) != 1 {
+		t.Fatalf("expected 1 duplicate group (abc), got %d", len(groups))
+	}
+	if len(groups[0]) != 3 {
+		t.Errorf("expected 3 members in abc group, got %d", len(groups[0]))
+	}
+	for _, r := range groups[0] {
+		if BaseAlias(r.EntityAliasName) != "abc" {
+			t.Errorf("unexpected alias %q in abc group", r.EntityAliasName)
+		}
+	}
+}
+
+func TestFindAliasDuplicates_NoDuplicates(t *testing.T) {
+	records := []Record{
+		{ClientID: "1", EntityAliasName: "alice-1"},
+		{ClientID: "2", EntityAliasName: "bob@corp"},
+		{ClientID: "3", EntityAliasName: ""},
+	}
+	groups := FindAliasDuplicates(records)
+	if len(groups) != 0 {
+		t.Errorf("expected no duplicate groups, got %d", len(groups))
+	}
+}
+
 func TestSort(t *testing.T) {
 	records := []Record{
 		{NamespacePath: "zzz/"},

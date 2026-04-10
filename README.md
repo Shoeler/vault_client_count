@@ -18,7 +18,7 @@ versions), and displays a summary of client counts by mount path and type.
 - Normalizes **namespace paths** (empty/`root` → `[root]`, ensures trailing `/`)
 - Normalizes **mount paths** (ensures trailing `/`)
 - Normalizes **timestamps** to UTC across all common Vault timestamp formats
-- **Deduplicates** clients across files by `client_id` (disable with `-d`)
+- **Deduplicates** clients across files by `client_id` (disable with `-d`), or by `entity_alias_name` base (`--dedup-alias`)
 - **Filters** by namespace (substring) or client type
 - **Sorts** by any column
 - Prints a **summary** with counts broken down by mount path and client type
@@ -54,11 +54,21 @@ OPTIONS:
         Filter rows by namespace path (substring match)
   -type string
         Filter rows by client type: entity, non-entity, acme, secret-sync
+  -since string
+        Exclude records whose token_creation_time is before this value.
+        Accepts any Vault timestamp format: "2024-01-01", "2024-01-01T00:00:00Z", etc.
+        Records with no token_creation_time are always kept.
   -p    Partition and report PKI/cert clients separately.
         A client is considered PKI if client_type=acme (ACME protocol clients
         from the PKI secrets engine) OR mount_accessor starts with auth_cert
         (cert auth method clients). Both types are reported together as "PKI".
   -d    Disable deduplication (count duplicate client IDs separately)
+  -dedup-alias
+        Deduplicate by entity_alias_name instead of client_id. Two aliases are
+        considered the same if their base (everything before the first '-' or '@')
+        matches. Example: "abc-123" and "abc@corp" both reduce to "abc".
+        Matching records are printed before the summary. Records without an alias
+        are always kept. Mutually exclusive with -d.
   -per-file
         Print a summary for each input file before the combined summary
   -debug
@@ -102,6 +112,15 @@ vault-csv-normalizer -f export.csv --debug
 
 # Count all records without deduplication
 vault-csv-normalizer -f jan.csv feb.csv -d
+
+# Deduplicate by entity alias base (strips after '-' or '@')
+vault-csv-normalizer -f jan.csv feb.csv --dedup-alias
+
+# Exclude records created before 2024-06-01
+vault-csv-normalizer -f export.csv --since 2024-06-01
+
+# Combine date filter with namespace filter
+vault-csv-normalizer -f export.csv --since 2024-01-01T00:00:00Z --namespace finance/
 
 # Combine filters and multiple files
 vault-csv-normalizer -f jan.csv feb.csv --namespace finance/ --type non-entity
@@ -164,6 +183,7 @@ The tool expects CSVs exported from the Vault activity export API
 | `client_type`            | No       | Type of client (entity, non-entity, acme, etc.)  |
 | `token_creation_time`    | No       | RFC3339 timestamp of token creation              |
 | `client_first_usage_time`| No       | RFC3339 timestamp of first authenticated call    |
+| `entity_alias_name`      | No       | Human-readable alias for the entity (used by `--dedup-alias`) |
 
 ### Supported Column Aliases
 
@@ -177,6 +197,8 @@ The tool automatically maps legacy and alternate column names:
 | `mount`               | `mount_path`             | Alternate naming           |
 | `auth_backend`        | `auth_method`            | Older Vault versions       |
 | `type`                | `client_type`            | Shortened column name      |
+| `alias_name`          | `entity_alias_name`      | Alternate naming           |
+| `entity_alias`        | `entity_alias_name`      | Alternate naming           |
 
 Column names are matched **case-insensitively**.
 

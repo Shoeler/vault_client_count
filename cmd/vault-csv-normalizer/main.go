@@ -25,8 +25,10 @@ func main() {
 	var sortBy string
 	var filterNS string
 	var filterType string
+	var filterSince string
 	var countPKI bool
 	var noDedup bool
+	var dedupAlias bool
 	var debugMode bool
 	var perFile bool
 	var showHelp bool
@@ -35,8 +37,10 @@ func main() {
 	flag.StringVar(&sortBy, "sort", "namespace_path", "Column to sort by: namespace_path, client_type, token_creation_time, client_first_usage_time, mount_accessor")
 	flag.StringVar(&filterNS, "namespace", "", "Filter rows by namespace path (substring match)")
 	flag.StringVar(&filterType, "type", "", "Filter rows by client type: entity, non-entity, acme, secret-sync")
+	flag.StringVar(&filterSince, "since", "", "Exclude records with a token_creation_time before this value (e.g. 2024-01-01 or 2024-01-01T00:00:00Z)")
 	flag.BoolVar(&countPKI, "p", false, "Partition and report PKI/cert clients (client_type=acme or mount_accessor prefix auth_cert) separately")
 	flag.BoolVar(&noDedup, "d", false, "Disable deduplication (count duplicate client IDs separately)")
+	flag.BoolVar(&dedupAlias, "dedup-alias", false, "Deduplicate by entity_alias_name instead of client_id (records without an alias are always kept)")
 	flag.BoolVar(&debugMode, "debug", false, "Print a table of all records with no mount path")
 	flag.BoolVar(&perFile, "per-file", false, "Print a summary for each input file before the combined summary")
 	flag.BoolVar(&showHelp, "help", false, "Show usage information")
@@ -66,7 +70,22 @@ func main() {
 
 	// Normalize (and optionally deduplicate) across all input files.
 	normalized := normalizer.Normalize(allRecords)
-	if !noDedup {
+	switch {
+	case noDedup:
+		// no deduplication
+	case dedupAlias:
+		groups := normalizer.FindAliasDuplicates(normalized)
+		if len(groups) > 0 {
+			fmt.Fprintf(os.Stdout, "Alias duplicates found (%d group(s))\n", len(groups))
+			fmt.Fprintln(os.Stdout, "=====================================")
+			for _, group := range groups {
+				fmt.Fprintf(os.Stdout, "\nBase alias: %q\n", normalizer.BaseAlias(group[0].EntityAliasName))
+				renderer.PrintTable(os.Stdout, group)
+			}
+			fmt.Fprintln(os.Stdout)
+		}
+		normalized = normalizer.DeduplicateByAlias(normalized)
+	default:
 		normalized = normalizer.Deduplicate(normalized)
 	}
 
@@ -76,6 +95,14 @@ func main() {
 	}
 	if filterType != "" {
 		normalized = normalizer.FilterByClientType(normalized, filterType)
+	}
+	if filterSince != "" {
+		since := normalizer.ParseTime(filterSince)
+		if since.IsZero() {
+			fmt.Fprintf(os.Stderr, "error: --since %q is not a recognized date/time format\n", filterSince)
+			os.Exit(1)
+		}
+		normalized = normalizer.FilterSince(normalized, since)
 	}
 
 	// Sort.
@@ -166,5 +193,10 @@ CSV FORMAT (Vault activity export):
   Older Vault exports may use "timestamp" instead of "token_creation_time".
   All variants are handled automatically.
 
-  PKI clients are identified by a mount_accessor that starts with "auth_cert".`)
+  PKI clients are identified by a mount_accessor that starts with "auth_cert".
+
+  Optional column:
+    entity_alias_name  (also accepted as: alias_name, entity_alias)
+      When present, --dedup-alias will collapse records that share the same
+      alias name down to one entry per alias.`)
 }

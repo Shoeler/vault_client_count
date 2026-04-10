@@ -17,16 +17,17 @@ type RawRecord struct {
 	// Source tracks which file this record came from.
 	Source string
 
-	ClientID            string
-	NamespaceID         string
-	NamespacePath       string
-	MountAccessor       string
-	MountPath           string
-	MountType           string
-	AuthMethod          string
-	ClientType          string
-	TokenCreationTime   string // may be populated from legacy "timestamp" column
+	ClientID             string
+	NamespaceID          string
+	NamespacePath        string
+	MountAccessor        string
+	MountPath            string
+	MountType            string
+	AuthMethod           string
+	ClientType           string
+	TokenCreationTime    string // may be populated from legacy "timestamp" column
 	ClientFirstUsageTime string
+	EntityAliasName      string
 }
 
 // knownColumns maps all recognised (lowercased, trimmed) header variants to
@@ -42,6 +43,7 @@ var knownColumns = map[string]string{
 	"client_type":            "client_type",
 	"token_creation_time":    "token_creation_time",
 	"client_first_usage_time": "client_first_usage_time",
+	"entity_alias_name":      "entity_alias_name",
 	// Legacy / alternative column names:
 	"timestamp":              "token_creation_time", // Vault < 1.17
 	"first_seen":             "client_first_usage_time",
@@ -49,6 +51,8 @@ var knownColumns = map[string]string{
 	"mount":                  "mount_path",
 	"auth_backend":           "auth_method",
 	"type":                   "client_type",
+	"alias_name":             "entity_alias_name",
+	"entity_alias":           "entity_alias_name",
 }
 
 // ParseFile opens path, detects the header layout, and returns one RawRecord
@@ -130,6 +134,7 @@ func parseReader(r io.Reader, source string) ([]RawRecord, error) {
 			ClientType:           get(row, "client_type"),
 			TokenCreationTime:    get(row, "token_creation_time"),
 			ClientFirstUsageTime: get(row, "client_first_usage_time"),
+			EntityAliasName:      get(row, "entity_alias_name"),
 		})
 	}
 

@@ -24,6 +24,7 @@ type Record struct {
 	ClientType           string // normalized: entity | non-entity | acme | secret-sync | unknown
 	TokenCreationTime    time.Time
 	ClientFirstUsageTime time.Time
+	EntityAliasName      string
 }
 
 // supportedSortKeys lists columns accepted by Sort.
@@ -60,6 +61,7 @@ func normalizeOne(r parser.RawRecord) Record {
 		ClientType:           normalizeClientType(r.ClientType),
 		TokenCreationTime:    parseTime(r.TokenCreationTime),
 		ClientFirstUsageTime: parseTime(r.ClientFirstUsageTime),
+		EntityAliasName:      strings.TrimSpace(r.EntityAliasName),
 	}
 }
 
@@ -138,6 +140,13 @@ var timeFormats = []string{
 }
 
 func parseTime(raw string) time.Time {
+	return ParseTime(raw)
+}
+
+// ParseTime parses a timestamp string using all Vault-known formats and returns
+// a UTC time.Time. Returns the zero value for empty, "0", "N/A", or
+// unrecognized input. Accepts the same formats as Vault activity exports.
+func ParseTime(raw string) time.Time {
 	raw = strings.TrimSpace(raw)
 	if raw == "" || raw == "0" || raw == "N/A" {
 		return time.Time{}
@@ -171,6 +180,73 @@ func Deduplicate(records []Record) []Record {
 	return out
 }
 
+// BaseAlias returns the portion of an entity alias name before the first '-'
+// or '@' character. If neither is present the full name is returned.
+// Example: "abc-123" → "abc", "alice@corp" → "alice", "plain" → "plain".
+func BaseAlias(name string) string {
+	for i, ch := range name {
+		if ch == '-' || ch == '@' {
+			return name[:i]
+		}
+	}
+	return name
+}
+
+// FindAliasDuplicates groups records by their BaseAlias and returns every
+// group that contains more than one record. Records with a blank
+// EntityAliasName are ignored. The groups are returned in the order the first
+// member of each group appeared in records.
+func FindAliasDuplicates(records []Record) [][]Record {
+	type entry struct {
+		base    string
+		members []Record
+	}
+	index := make(map[string]int) // base → position in entries
+	var entries []entry
+
+	for _, r := range records {
+		if r.EntityAliasName == "" {
+			continue
+		}
+		base := BaseAlias(r.EntityAliasName)
+		if idx, ok := index[base]; ok {
+			entries[idx].members = append(entries[idx].members, r)
+		} else {
+			index[base] = len(entries)
+			entries = append(entries, entry{base: base, members: []Record{r}})
+		}
+	}
+
+	var out [][]Record
+	for _, e := range entries {
+		if len(e.members) > 1 {
+			out = append(out, e.members)
+		}
+	}
+	return out
+}
+
+// DeduplicateByAlias removes records that share the same BaseAlias, keeping
+// the first occurrence per base alias. Records with a blank EntityAliasName
+// are always kept.
+func DeduplicateByAlias(records []Record) []Record {
+	seen := make(map[string]struct{}, len(records))
+	out := make([]Record, 0, len(records))
+	for _, r := range records {
+		if r.EntityAliasName == "" {
+			out = append(out, r)
+			continue
+		}
+		base := BaseAlias(r.EntityAliasName)
+		if _, dup := seen[base]; dup {
+			continue
+		}
+		seen[base] = struct{}{}
+		out = append(out, r)
+	}
+	return out
+}
+
 // IsPKIClient reports whether r is a PKI/cert client. It matches on either:
 //   - client_type == "acme" (ACME protocol clients from the PKI secrets engine), or
 //   - mount_accessor starting with "auth_cert" (cert auth method clients)
@@ -190,6 +266,20 @@ func PartitionPKI(records []Record, isPKI func(Record) bool) (pki, nonPKI []Reco
 		}
 	}
 	return
+}
+
+// FilterSince removes records whose TokenCreationTime is non-zero and strictly
+// before since. Records with a zero TokenCreationTime (unknown/missing) are
+// always kept.
+func FilterSince(records []Record, since time.Time) []Record {
+	out := records[:0]
+	for _, r := range records {
+		if !r.TokenCreationTime.IsZero() && r.TokenCreationTime.Before(since) {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
 }
 
 // FilterByNamespace returns records whose NamespacePath contains substr.
