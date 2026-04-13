@@ -18,7 +18,7 @@ versions), and displays a summary of client counts by mount path and type.
 - Normalizes **namespace paths** (empty/`root` → `[root]`, ensures trailing `/`)
 - Normalizes **mount paths** (ensures trailing `/`)
 - Normalizes **timestamps** to UTC across all common Vault timestamp formats
-- **Deduplicates** clients across files by `client_id` (disable with `-d`), or by `entity_alias_name` base (`--dedup-alias`)
+- **Deduplicates** clients across files by `client_id` when `-d` is set, or by `entity_alias_name` base (`--dedup-alias`)
 - **Filters** by namespace (substring) or client type
 - **Sorts** by any column
 - Prints a **summary** with counts broken down by mount path and client type
@@ -69,7 +69,7 @@ OPTIONS:
         Apply a since filter to one specific file only. May be specified
         multiple times for different files. The filename is matched against
         the base name (e.g. jan.csv=2024-01-15).
-  -d    Disable deduplication (count duplicate client IDs separately)
+  -d    Deduplicate records by client_id across all input files
   -dedup-alias
         Deduplicate by entity_alias_name instead of client_id. Two aliases are
         considered the same if their base (everything before the first '-' or '@')
@@ -125,7 +125,7 @@ vault-csv-normalizer -f jan.csv feb.csv --per-file
 # Debug: show all records with no mount path
 vault-csv-normalizer -f export.csv --debug
 
-# Count all records without deduplication
+# Deduplicate client_ids across files
 vault-csv-normalizer -f jan.csv feb.csv -d
 
 # Deduplicate by entity alias base (strips after '-' or '@')

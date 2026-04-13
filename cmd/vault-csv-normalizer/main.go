@@ -44,7 +44,7 @@ func main() {
 	var filterSince string
 	var filterSinceFile = make(fileDateFlag)
 	var countPKI bool
-	var noDedup bool
+	var dedup bool
 	var dedupAlias bool
 	var debugMode bool
 	var perFile bool
@@ -57,7 +57,7 @@ func main() {
 	flag.StringVar(&filterSince, "since", "", "Exclude records with a token_creation_time before this value (e.g. 2024-01-01 or 2024-01-01T00:00:00Z)")
 	flag.Var(&filterSinceFile, "since-file", "Apply a since filter to one file only: filename=date. May be specified multiple times for different files.")
 	flag.BoolVar(&countPKI, "p", false, "Partition and report PKI/cert clients (client_type=acme or mount_accessor prefix auth_cert) separately")
-	flag.BoolVar(&noDedup, "d", false, "Disable deduplication (count duplicate client IDs separately)")
+	flag.BoolVar(&dedup, "d", false, "Deduplicate records by client_id across all input files")
 	flag.BoolVar(&dedupAlias, "dedup-alias", false, "Deduplicate by entity_alias_name instead of client_id (records without an alias are always kept)")
 	flag.BoolVar(&debugMode, "debug", false, "Print a table of all records with no mount path")
 	flag.BoolVar(&perFile, "per-file", false, "Print a summary for each input file before the combined summary")
@@ -104,8 +104,6 @@ func main() {
 		normalized = normalizer.FilterSincePerSource(normalized, sinceByKey)
 	}
 	switch {
-	case noDedup:
-		// no deduplication
 	case dedupAlias:
 		groups := normalizer.FindAliasDuplicates(normalized)
 		if len(groups) > 0 {
@@ -118,7 +116,7 @@ func main() {
 			fmt.Fprintln(os.Stdout)
 		}
 		normalized = normalizer.DeduplicateByAlias(normalized)
-	default:
+	case dedup:
 		normalized = normalizer.Deduplicate(normalized)
 	}
 
