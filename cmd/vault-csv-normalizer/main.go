@@ -5,18 +5,34 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/vault-csv-normalizer/internal/normalizer"
 	"github.com/vault-csv-normalizer/internal/parser"
 	"github.com/vault-csv-normalizer/internal/renderer"
 )
 
-// multiFlag allows -f to be specified multiple times.
+// multiFlag allows a flag to be specified multiple times.
 type multiFlag []string
 
 func (m *multiFlag) String() string { return fmt.Sprintf("%v", *m) }
 func (m *multiFlag) Set(v string) error {
 	*m = append(*m, v)
+	return nil
+}
+
+// fileDateFlag accepts one or more "filename=date" pairs and maps each
+// filename (matched against the base name) to a parsed since time.
+type fileDateFlag map[string]string
+
+func (f fileDateFlag) String() string { return fmt.Sprintf("%v", map[string]string(f)) }
+func (f fileDateFlag) Set(v string) error {
+	i := strings.LastIndex(v, "=")
+	if i < 1 {
+		return fmt.Errorf("expected filename=date, got %q", v)
+	}
+	f[v[:i]] = v[i+1:]
 	return nil
 }
 
@@ -26,6 +42,7 @@ func main() {
 	var filterNS string
 	var filterType string
 	var filterSince string
+	var filterSinceFile = make(fileDateFlag)
 	var countPKI bool
 	var noDedup bool
 	var dedupAlias bool
@@ -38,6 +55,7 @@ func main() {
 	flag.StringVar(&filterNS, "namespace", "", "Filter rows by namespace path (substring match)")
 	flag.StringVar(&filterType, "type", "", "Filter rows by client type: entity, non-entity, acme, secret-sync")
 	flag.StringVar(&filterSince, "since", "", "Exclude records with a token_creation_time before this value (e.g. 2024-01-01 or 2024-01-01T00:00:00Z)")
+	flag.Var(&filterSinceFile, "since-file", "Apply a since filter to one file only: filename=date. May be specified multiple times for different files.")
 	flag.BoolVar(&countPKI, "p", false, "Partition and report PKI/cert clients (client_type=acme or mount_accessor prefix auth_cert) separately")
 	flag.BoolVar(&noDedup, "d", false, "Disable deduplication (count duplicate client IDs separately)")
 	flag.BoolVar(&dedupAlias, "dedup-alias", false, "Deduplicate by entity_alias_name instead of client_id (records without an alias are always kept)")
@@ -68,8 +86,23 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Normalize (and optionally deduplicate) across all input files.
+	// Normalize across all input files.
 	normalized := normalizer.Normalize(allRecords)
+
+	// Apply per-file since filters before deduplication so that a record
+	// filtered out from one file does not block the same client_id in another.
+	if len(filterSinceFile) > 0 {
+		sinceByKey := make(map[string]time.Time, len(filterSinceFile))
+		for nameKey, dateStr := range filterSinceFile {
+			t := normalizer.ParseTime(dateStr)
+			if t.IsZero() {
+				fmt.Fprintf(os.Stderr, "error: --since-file %q=%q is not a recognized date/time format\n", nameKey, dateStr)
+				os.Exit(1)
+			}
+			sinceByKey[nameKey] = t
+		}
+		normalized = normalizer.FilterSincePerSource(normalized, sinceByKey)
+	}
 	switch {
 	case noDedup:
 		// no deduplication
@@ -183,6 +216,12 @@ EXAMPLES:
 
   # PKI report across multiple months
   vault-csv-normalizer -f jan.csv feb.csv -p
+
+  # Apply --since only to one file (e.g. jan.csv starts mid-month)
+  vault-csv-normalizer -f jan.csv feb.csv --since-file jan.csv=2024-01-15
+
+  # Per-file since filters on multiple files
+  vault-csv-normalizer -f jan.csv feb.csv --since-file jan.csv=2024-01-15 --since-file feb.csv=2024-02-01
 
 CSV FORMAT (Vault activity export):
   Expected columns (order-independent, case-insensitive):

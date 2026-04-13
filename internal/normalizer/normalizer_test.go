@@ -449,3 +449,114 @@ func TestPartitionPKI_Empty(t *testing.T) {
 		t.Error("expected nil slices for empty input")
 	}
 }
+
+// ── FilterSincePerSource ──────────────────────────────────────────────────────
+
+var (
+	jan15 = time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC)
+	jan20 = time.Date(2024, 1, 20, 0, 0, 0, 0, time.UTC)
+	feb01 = time.Date(2024, 2, 1, 0, 0, 0, 0, time.UTC)
+)
+
+func TestFilterSincePerSource_FiltersTargetFileOnly(t *testing.T) {
+	records := []Record{
+		// jan.csv: one record before cutoff, one after
+		{ClientID: "j1", Source: "jan.csv", TokenCreationTime: jan15.Add(-24 * time.Hour)}, // before — excluded
+		{ClientID: "j2", Source: "jan.csv", TokenCreationTime: jan15},                       // on cutoff — kept
+		{ClientID: "j3", Source: "jan.csv", TokenCreationTime: jan20},                       // after — kept
+		// feb.csv: not in filter map — all kept regardless of date
+		{ClientID: "f1", Source: "feb.csv", TokenCreationTime: jan15.Add(-24 * time.Hour)}, // old but kept
+		{ClientID: "f2", Source: "feb.csv", TokenCreationTime: feb01},
+	}
+
+	sinceBySource := map[string]time.Time{"jan.csv": jan15}
+	got := FilterSincePerSource(records, sinceBySource)
+
+	if len(got) != 4 {
+		t.Fatalf("expected 4 records, got %d", len(got))
+	}
+	for _, r := range got {
+		if r.ClientID == "j1" {
+			t.Error("j1 should have been excluded (before jan.csv cutoff)")
+		}
+	}
+}
+
+func TestFilterSincePerSource_BaseNameMatchesFullPath(t *testing.T) {
+	// Source stored as a full path; filter key is just the base name.
+	records := []Record{
+		{ClientID: "a", Source: "/exports/2024/jan.csv", TokenCreationTime: jan15.Add(-time.Hour)},
+		{ClientID: "b", Source: "/exports/2024/jan.csv", TokenCreationTime: jan20},
+	}
+	sinceBySource := map[string]time.Time{"jan.csv": jan15}
+	got := FilterSincePerSource(records, sinceBySource)
+
+	if len(got) != 1 || got[0].ClientID != "b" {
+		t.Errorf("expected only record b, got %v", got)
+	}
+}
+
+func TestFilterSincePerSource_FullPathKeyAlsoMatches(t *testing.T) {
+	// Filter key is the full path, not the base name.
+	records := []Record{
+		{ClientID: "a", Source: "/exports/jan.csv", TokenCreationTime: jan15.Add(-time.Hour)},
+		{ClientID: "b", Source: "/exports/jan.csv", TokenCreationTime: jan20},
+	}
+	sinceBySource := map[string]time.Time{"/exports/jan.csv": jan15}
+	got := FilterSincePerSource(records, sinceBySource)
+
+	if len(got) != 1 || got[0].ClientID != "b" {
+		t.Errorf("expected only record b, got %v", got)
+	}
+}
+
+func TestFilterSincePerSource_ZeroCreationTimeAlwaysKept(t *testing.T) {
+	// Records with no token_creation_time must not be dropped.
+	records := []Record{
+		{ClientID: "z", Source: "jan.csv", TokenCreationTime: time.Time{}},
+	}
+	sinceBySource := map[string]time.Time{"jan.csv": jan15}
+	got := FilterSincePerSource(records, sinceBySource)
+
+	if len(got) != 1 {
+		t.Error("record with zero TokenCreationTime should be kept")
+	}
+}
+
+func TestFilterSincePerSource_MultipleFiles(t *testing.T) {
+	records := []Record{
+		{ClientID: "j1", Source: "jan.csv", TokenCreationTime: jan15.Add(-time.Hour)}, // excluded
+		{ClientID: "j2", Source: "jan.csv", TokenCreationTime: jan20},                 // kept
+		{ClientID: "f1", Source: "feb.csv", TokenCreationTime: feb01.Add(-time.Hour)}, // excluded
+		{ClientID: "f2", Source: "feb.csv", TokenCreationTime: feb01},                 // kept
+		{ClientID: "m1", Source: "mar.csv", TokenCreationTime: jan15.Add(-time.Hour)}, // no filter — kept
+	}
+	sinceBySource := map[string]time.Time{
+		"jan.csv": jan15,
+		"feb.csv": feb01,
+	}
+	got := FilterSincePerSource(records, sinceBySource)
+
+	if len(got) != 3 {
+		t.Fatalf("expected 3 records, got %d: %v", len(got), got)
+	}
+	kept := map[string]bool{}
+	for _, r := range got {
+		kept[r.ClientID] = true
+	}
+	for _, id := range []string{"j2", "f2", "m1"} {
+		if !kept[id] {
+			t.Errorf("expected %s to be kept", id)
+		}
+	}
+}
+
+func TestFilterSincePerSource_EmptyMap(t *testing.T) {
+	records := []Record{
+		{ClientID: "a", Source: "jan.csv", TokenCreationTime: jan15},
+	}
+	got := FilterSincePerSource(records, nil)
+	if len(got) != 1 {
+		t.Error("empty sinceBySource should return all records unchanged")
+	}
+}

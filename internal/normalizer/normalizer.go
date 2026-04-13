@@ -4,6 +4,7 @@ package normalizer
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -275,6 +276,29 @@ func FilterSince(records []Record, since time.Time) []Record {
 	out := records[:0]
 	for _, r := range records {
 		if !r.TokenCreationTime.IsZero() && r.TokenCreationTime.Before(since) {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
+// FilterSincePerSource applies per-file since filters to records. sinceBySource
+// maps a key (matched against both the record's full Source path and its base
+// name) to a cutoff time. Records whose Source matches a key and whose
+// TokenCreationTime is non-zero and before the cutoff are excluded. Records
+// whose Source does not match any key are always kept.
+func FilterSincePerSource(records []Record, sinceBySource map[string]time.Time) []Record {
+	if len(sinceBySource) == 0 {
+		return records
+	}
+	out := make([]Record, 0, len(records))
+	for _, r := range records {
+		since, ok := sinceBySource[filepath.Base(r.Source)]
+		if !ok {
+			since, ok = sinceBySource[r.Source]
+		}
+		if ok && !r.TokenCreationTime.IsZero() && r.TokenCreationTime.Before(since) {
 			continue
 		}
 		out = append(out, r)

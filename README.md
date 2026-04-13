@@ -62,6 +62,13 @@ OPTIONS:
         A client is considered PKI if client_type=acme (ACME protocol clients
         from the PKI secrets engine) OR mount_accessor starts with auth_cert
         (cert auth method clients). Both types are reported together as "PKI".
+  -since string
+        Exclude records with a token_creation_time before this value
+        (e.g. 2024-01-01 or 2024-01-01T00:00:00Z). Applies to all files.
+  -since-file filename=date
+        Apply a since filter to one specific file only. May be specified
+        multiple times for different files. The filename is matched against
+        the base name (e.g. jan.csv=2024-01-15).
   -d    Disable deduplication (count duplicate client IDs separately)
   -dedup-alias
         Deduplicate by entity_alias_name instead of client_id. Two aliases are
@@ -103,6 +110,14 @@ vault-csv-normalizer -f export.csv -p
 
 # PKI/cert report across multiple months
 vault-csv-normalizer -f jan.csv feb.csv -p
+
+# Apply --since only to jan.csv (e.g. it starts mid-month)
+vault-csv-normalizer -f jan.csv feb.csv --since-file jan.csv=2024-01-15
+
+# Per-file since filters on multiple files
+vault-csv-normalizer -f jan.csv feb.csv \
+  --since-file jan.csv=2024-01-15 \
+  --since-file feb.csv=2024-02-01
 
 # Per-file breakdown before the combined summary
 vault-csv-normalizer -f jan.csv feb.csv --per-file
