@@ -63,9 +63,9 @@ func TestParseTime(t *testing.T) {
 		{"garbage", time.Time{}},
 	}
 	for _, c := range cases {
-		got := parseTime(c.in)
+		got := ParseTime(c.in)
 		if !got.Equal(c.want) {
-			t.Errorf("parseTime(%q) = %v, want %v", c.in, got, c.want)
+			t.Errorf("ParseTime(%q) = %v, want %v", c.in, got, c.want)
 		}
 	}
 }
@@ -558,5 +558,53 @@ func TestFilterSincePerSource_EmptyMap(t *testing.T) {
 	got := FilterSincePerSource(records, nil)
 	if len(got) != 1 {
 		t.Error("empty sinceBySource should return all records unchanged")
+	}
+}
+
+// ── input mutation safety ─────────────────────────────────────────────────────
+// These tests guard against the records[:0] pattern, which reuses the backing
+// array and silently corrupts the caller's slice. Each filter must not modify
+// the elements of its input slice.
+
+func TestFilterSince_DoesNotMutateInput(t *testing.T) {
+	cutoff := time.Date(2024, 2, 1, 0, 0, 0, 0, time.UTC)
+	records := []Record{
+		{ClientID: "old", TokenCreationTime: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)},
+		{ClientID: "new", TokenCreationTime: time.Date(2024, 3, 1, 0, 0, 0, 0, time.UTC)},
+	}
+	snapshot := []Record{records[0], records[1]}
+
+	_ = FilterSince(records, cutoff)
+
+	if records[0] != snapshot[0] || records[1] != snapshot[1] {
+		t.Error("FilterSince modified the input slice's backing array")
+	}
+}
+
+func TestFilterByNamespace_DoesNotMutateInput(t *testing.T) {
+	records := []Record{
+		{ClientID: "a", NamespacePath: "education/"},
+		{ClientID: "b", NamespacePath: "finance/"},
+	}
+	snapshot := []Record{records[0], records[1]}
+
+	_ = FilterByNamespace(records, "education")
+
+	if records[0] != snapshot[0] || records[1] != snapshot[1] {
+		t.Error("FilterByNamespace modified the input slice's backing array")
+	}
+}
+
+func TestFilterByClientType_DoesNotMutateInput(t *testing.T) {
+	records := []Record{
+		{ClientID: "a", ClientType: "entity"},
+		{ClientID: "b", ClientType: "non-entity"},
+	}
+	snapshot := []Record{records[0], records[1]}
+
+	_ = FilterByClientType(records, "entity")
+
+	if records[0] != snapshot[0] || records[1] != snapshot[1] {
+		t.Error("FilterByClientType modified the input slice's backing array")
 	}
 }

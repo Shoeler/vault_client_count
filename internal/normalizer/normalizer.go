@@ -60,8 +60,8 @@ func normalizeOne(r parser.RawRecord) Record {
 		MountType:            strings.ToLower(strings.TrimSpace(r.MountType)),
 		AuthMethod:           strings.ToLower(strings.TrimSpace(r.AuthMethod)),
 		ClientType:           normalizeClientType(r.ClientType),
-		TokenCreationTime:    parseTime(r.TokenCreationTime),
-		ClientFirstUsageTime: parseTime(r.ClientFirstUsageTime),
+		TokenCreationTime:    ParseTime(r.TokenCreationTime),
+		ClientFirstUsageTime: ParseTime(r.ClientFirstUsageTime),
 		EntityAliasName:      strings.TrimSpace(r.EntityAliasName),
 	}
 }
@@ -138,10 +138,6 @@ var timeFormats = []string{
 	"2006-01-02 15:04:05Z",
 	"2006-01-02",
 	"01/02/2006",
-}
-
-func parseTime(raw string) time.Time {
-	return ParseTime(raw)
 }
 
 // ParseTime parses a timestamp string using all Vault-known formats and returns
@@ -273,7 +269,7 @@ func PartitionPKI(records []Record, isPKI func(Record) bool) (pki, nonPKI []Reco
 // before since. Records with a zero TokenCreationTime (unknown/missing) are
 // always kept.
 func FilterSince(records []Record, since time.Time) []Record {
-	out := records[:0]
+	out := make([]Record, 0, len(records))
 	for _, r := range records {
 		if !r.TokenCreationTime.IsZero() && r.TokenCreationTime.Before(since) {
 			continue
@@ -309,7 +305,7 @@ func FilterSincePerSource(records []Record, sinceBySource map[string]time.Time) 
 // FilterByNamespace returns records whose NamespacePath contains substr.
 func FilterByNamespace(records []Record, substr string) []Record {
 	substr = strings.ToLower(substr)
-	out := records[:0]
+	out := make([]Record, 0, len(records))
 	for _, r := range records {
 		if strings.Contains(strings.ToLower(r.NamespacePath), substr) {
 			out = append(out, r)
@@ -321,7 +317,7 @@ func FilterByNamespace(records []Record, substr string) []Record {
 // FilterByClientType returns records whose ClientType matches (case-insensitive).
 func FilterByClientType(records []Record, clientType string) []Record {
 	want := normalizeClientType(clientType)
-	out := records[:0]
+	out := make([]Record, 0, len(records))
 	for _, r := range records {
 		if r.ClientType == want {
 			out = append(out, r)

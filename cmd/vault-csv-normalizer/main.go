@@ -22,8 +22,8 @@ func (m *multiFlag) Set(v string) error {
 	return nil
 }
 
-// fileDateFlag accepts one or more "filename=date" pairs and maps each
-// filename (matched against the base name) to a parsed since time.
+// fileDateFlag accepts one or more "filename=date" pairs. Keys are matched
+// against both the base name and the full path of each record's Source field.
 type fileDateFlag map[string]string
 
 func (f fileDateFlag) String() string { return fmt.Sprintf("%v", map[string]string(f)) }
@@ -156,14 +156,13 @@ func main() {
 	}
 
 	if perFile {
+		bySource := make(map[string][]normalizer.Record, len(inputFiles))
+		for _, r := range normalized {
+			bySource[r.Source] = append(bySource[r.Source], r)
+		}
 		for _, path := range inputFiles {
 			label := filepath.Base(path)
-			var fileRecords []normalizer.Record
-			for _, r := range normalized {
-				if r.Source == path {
-					fileRecords = append(fileRecords, r)
-				}
-			}
+			fileRecords := bySource[path]
 			if countPKI {
 				pki, nonPKI := normalizer.PartitionPKI(fileRecords, normalizer.IsPKIClient)
 				renderer.PrintSummary(os.Stdout, nonPKI, label+" — Non-PKI")
@@ -230,7 +229,8 @@ CSV FORMAT (Vault activity export):
   Older Vault exports may use "timestamp" instead of "token_creation_time".
   All variants are handled automatically.
 
-  PKI clients are identified by a mount_accessor that starts with "auth_cert".
+  PKI clients are identified by client_type=acme or a mount_accessor that
+  starts with "auth_cert" (cert auth method clients).
 
   Optional column:
     entity_alias_name  (also accepted as: alias_name, entity_alias)

@@ -179,63 +179,19 @@ func TestPrintSummary_CustomLabel(t *testing.T) {
 	}
 }
 
-func TestPrintPKIReport_WithPKI(t *testing.T) {
-	pki := []normalizer.Record{
-		{
-			ClientID:      "pki-001",
-			NamespacePath: "[root]",
-			ClientType:    "entity",
-			AuthMethod:    "cert",
-			MountAccessor: "auth_cert_internal",
-			MountPath:     "auth/cert/",
-		},
-		{
-			ClientID:      "pki-002",
-			NamespacePath: "finance/",
-			ClientType:    "entity",
-			AuthMethod:    "cert",
-			MountAccessor: "auth_cert_prod",
-			MountPath:     "auth/cert/",
-		},
+// TestPrintTable_EmptySourceRendersAsDot pins the behaviour of filepath.Base(""),
+// which returns "." rather than "". Records with no Source will show "." in the
+// Source File column. This differs from the old shortPath("") == "" behaviour
+// and is documented here so any future change is a deliberate decision.
+func TestPrintTable_EmptySourceRendersAsDot(t *testing.T) {
+	records := []normalizer.Record{
+		{ClientID: "abc", ClientType: "entity", Source: ""},
 	}
 	var buf strings.Builder
-	PrintPKIReport(&buf, pki)
+	PrintTable(&buf, records)
 	out := buf.String()
-
-	if !strings.Contains(out, "PKI (cert) Clients") {
-		t.Error("expected PKI section header")
-	}
-	if !strings.Contains(out, "pki-001") {
-		t.Error("expected pki-001 in PKI table")
-	}
-	if !strings.Contains(out, "PKI Client Summary") {
-		t.Error("expected PKI Client Summary section")
-	}
-	if !strings.Contains(out, "TOTAL:") {
-		t.Error("expected total count in PKI summary")
+	if !strings.Contains(out, ".") {
+		t.Errorf("expected '.' for empty Source (filepath.Base(\"\") = \".\"), got:\n%s", out)
 	}
 }
 
-func TestPrintPKIReport_Empty(t *testing.T) {
-	var buf strings.Builder
-	PrintPKIReport(&buf, nil)
-	out := buf.String()
-	if !strings.Contains(out, "no PKI clients found") {
-		t.Errorf("expected 'no PKI clients found' message, got: %s", out)
-	}
-}
-
-func TestShortPath(t *testing.T) {
-	cases := []struct{ in, want string }{
-		{"/home/user/exports/jan.csv", "jan.csv"},
-		{"jan.csv", "jan.csv"},
-		{`C:\Users\exports\jan.csv`, "jan.csv"},
-		{"", ""},
-	}
-	for _, c := range cases {
-		got := shortPath(c.in)
-		if got != c.want {
-			t.Errorf("shortPath(%q) = %q, want %q", c.in, got, c.want)
-		}
-	}
-}

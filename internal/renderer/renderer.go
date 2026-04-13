@@ -5,6 +5,7 @@ package renderer
 import (
 	"fmt"
 	"io"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -56,9 +57,11 @@ var columns = []column{
 	{
 		header: "Source File",
 		width:  12,
-		get:    func(r normalizer.Record) string { return shortPath(r.Source) },
+		get:    func(r normalizer.Record) string { return filepath.Base(r.Source) },
 	},
 }
+
+var typeOrder = []string{"entity", "non-entity", "acme", "secret-sync", "unknown"}
 
 // PrintTable writes the records as a plain-text table to w.
 func PrintTable(w io.Writer, records []normalizer.Record) {
@@ -143,8 +146,6 @@ func PrintSummary(w io.Writer, records []normalizer.Record, label string) {
 	typeColW := len("Client Type")
 	countColW := len("Count")
 
-	typeOrder := []string{"entity", "non-entity", "acme", "secret-sync", "unknown"}
-
 	fmt.Fprintln(w)
 	fmt.Fprintf(w, "%s\n", label)
 	fmt.Fprintf(w, "%s\n", strings.Repeat("-", len(label)))
@@ -215,23 +216,6 @@ func sortedKeys(m map[string]int) []string {
 	return keys
 }
 
-// PrintPKIReport prints the PKI client table followed by its summary section.
-// Call this only when -p is active and pki is non-empty.
-func PrintPKIReport(w io.Writer, pki []normalizer.Record) {
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, "PKI (cert) Clients")
-	fmt.Fprintln(w, strings.Repeat("=", 18))
-
-	if len(pki) == 0 {
-		fmt.Fprintln(w, "(no PKI clients found)")
-		return
-	}
-
-	PrintTable(w, pki)
-	PrintSummary(w, pki, "PKI Client Summary")
-}
-
-// ── helpers ──────────────────────────────────────────────────────────────────
 
 func printRow(w io.Writer, cols []column, value func(column) string) {
 	var sb strings.Builder
@@ -268,12 +252,3 @@ func fmtTime(t time.Time) string {
 	return t.UTC().Format("2006-01-02 15:04:05Z")
 }
 
-// shortPath returns just the filename component of a path for display.
-func shortPath(path string) string {
-	for i := len(path) - 1; i >= 0; i-- {
-		if path[i] == '/' || path[i] == '\\' {
-			return path[i+1:]
-		}
-	}
-	return path
-}
