@@ -110,7 +110,7 @@ func main() {
 			fmt.Fprintf(os.Stdout, "Alias duplicates found (%d group(s))\n", len(groups))
 			fmt.Fprintln(os.Stdout, "=====================================")
 			for _, group := range groups {
-				fmt.Fprintf(os.Stdout, "\nBase alias: %q\n", normalizer.BaseAlias(group[0].EntityAliasName))
+				fmt.Fprintf(os.Stdout, "\nAlias group: %q\n", normalizer.BaseAlias(group[0].EntityAliasName))
 				renderer.PrintTable(os.Stdout, group)
 			}
 			fmt.Fprintln(os.Stdout)

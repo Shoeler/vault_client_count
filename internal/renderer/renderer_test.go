@@ -179,6 +179,44 @@ func TestPrintSummary_CustomLabel(t *testing.T) {
 	}
 }
 
+// TestPrintTable_AliasColumnAppearsWhenPresent verifies that the Entity Alias
+// column is added automatically when at least one record has a non-empty
+// EntityAliasName, and that the original full alias value (not the stripped
+// base) is shown.
+func TestPrintTable_AliasColumnAppearsWhenPresent(t *testing.T) {
+	records := []normalizer.Record{
+		{ClientID: "a", ClientType: "entity", EntityAliasName: "alice-001"},
+		{ClientID: "b", ClientType: "entity", EntityAliasName: "alice-002"},
+	}
+	var buf strings.Builder
+	PrintTable(&buf, records)
+	out := buf.String()
+
+	if !strings.Contains(out, "Entity Alias") {
+		t.Error("expected 'Entity Alias' column header when records have aliases")
+	}
+	if !strings.Contains(out, "alice-001") {
+		t.Error("expected original alias 'alice-001' in output, not the stripped base")
+	}
+	if !strings.Contains(out, "alice-002") {
+		t.Error("expected original alias 'alice-002' in output")
+	}
+}
+
+func TestPrintTable_AliasColumnHiddenWhenAbsent(t *testing.T) {
+	records := []normalizer.Record{
+		{ClientID: "a", ClientType: "entity"},
+		{ClientID: "b", ClientType: "non-entity"},
+	}
+	var buf strings.Builder
+	PrintTable(&buf, records)
+	out := buf.String()
+
+	if strings.Contains(out, "Entity Alias") {
+		t.Error("expected no 'Entity Alias' column when no records have aliases")
+	}
+}
+
 // TestPrintTable_EmptySourceRendersAsDot pins the behaviour of filepath.Base(""),
 // which returns "." rather than "". Records with no Source will show "." in the
 // Source File column. This differs from the old shortPath("") == "" behaviour

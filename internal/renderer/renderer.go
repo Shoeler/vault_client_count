@@ -63,16 +63,30 @@ var columns = []column{
 
 var typeOrder = []string{"entity", "non-entity", "acme", "secret-sync", "unknown"}
 
-// PrintTable writes the records as a plain-text table to w.
+var aliasColumn = column{
+	header: "Entity Alias",
+	width:  12,
+	get:    func(r normalizer.Record) string { return r.EntityAliasName },
+}
+
+// PrintTable writes the records as a plain-text table to w. If any record has
+// a non-empty EntityAliasName, an Entity Alias column is appended so the
+// original alias values are visible in alias deduplication output.
 func PrintTable(w io.Writer, records []normalizer.Record) {
 	if len(records) == 0 {
 		fmt.Fprintln(w, "(no records to display)")
 		return
 	}
 
-	// Clone columns and compute actual widths.
+	// Build column list, appending the alias column only when the data has it.
 	cols := make([]column, len(columns))
 	copy(cols, columns)
+	for _, r := range records {
+		if r.EntityAliasName != "" {
+			cols = append(cols, aliasColumn)
+			break
+		}
+	}
 
 	for _, r := range records {
 		for i, c := range cols {
