@@ -209,8 +209,8 @@ func aliasKeyFor(r Record) aliasKey {
 
 // FindAliasDuplicates groups records by (BaseAlias, AuthMethod, source file)
 // and returns every group that contains more than one record. Records with a
-// blank EntityAliasName are ignored. Groups are returned in the order the
-// first member of each group appeared in records.
+// blank EntityAliasName or that are PKI clients are ignored. Groups are
+// returned in the order the first member of each group appeared in records.
 func FindAliasDuplicates(records []Record) [][]Record {
 	type entry struct {
 		key     aliasKey
@@ -220,7 +220,7 @@ func FindAliasDuplicates(records []Record) [][]Record {
 	var entries []entry
 
 	for _, r := range records {
-		if r.EntityAliasName == "" {
+		if r.EntityAliasName == "" || IsPKIClient(r) {
 			continue
 		}
 		k := aliasKeyFor(r)
@@ -242,13 +242,13 @@ func FindAliasDuplicates(records []Record) [][]Record {
 }
 
 // DeduplicateByAlias keeps at most one record per (BaseAlias, AuthMethod,
-// source file) combination. Records with a blank EntityAliasName are always
-// kept.
+// source file) combination. Records with a blank EntityAliasName or that are
+// PKI clients are always kept.
 func DeduplicateByAlias(records []Record) []Record {
 	seen := make(map[aliasKey]struct{}, len(records))
 	out := make([]Record, 0, len(records))
 	for _, r := range records {
-		if r.EntityAliasName == "" {
+		if r.EntityAliasName == "" || IsPKIClient(r) {
 			out = append(out, r)
 			continue
 		}

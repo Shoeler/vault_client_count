@@ -315,6 +315,43 @@ func TestFindAliasDuplicates_NoDuplicates(t *testing.T) {
 	}
 }
 
+func TestDeduplicateByAlias_IgnoresPKIClients(t *testing.T) {
+	// PKI records with the same alias base and mount accessor are all kept.
+	// A pair of non-PKI records with the same key are deduplicated normally.
+	records := []Record{
+		{ClientID: "1", EntityAliasName: "abc-123", ClientType: "acme", MountAccessor: "auth_ldap_abc123", Source: "jan.csv"},
+		{ClientID: "2", EntityAliasName: "abc-456", ClientType: "acme", MountAccessor: "auth_ldap_abc123", Source: "jan.csv"},
+		{ClientID: "3", EntityAliasName: "abc-789", MountAccessor: "auth_cert_xyz", Source: "jan.csv"},      // cert auth — PKI, kept
+		{ClientID: "4", EntityAliasName: "xyz-000", MountAccessor: "auth_ldap_abc123", Source: "jan.csv"},  // non-PKI, first occurrence: kept
+		{ClientID: "5", EntityAliasName: "xyz-999", MountAccessor: "auth_ldap_abc123", Source: "jan.csv"},  // non-PKI dup of 4 (same base xyz): dropped
+	}
+	out := DeduplicateByAlias(records)
+	if len(out) != 4 {
+		t.Fatalf("expected 4 records (3 PKI/cert + 1 non-PKI), got %d: %v", len(out), clientIDs(out))
+	}
+	kept := clientIDSet(out)
+	for _, id := range []string{"1", "2", "3", "4"} {
+		if !kept[id] {
+			t.Errorf("expected ClientID=%s to be kept", id)
+		}
+	}
+	if kept["5"] {
+		t.Errorf("expected ClientID=5 (non-PKI dup) to be dropped")
+	}
+}
+
+func TestFindAliasDuplicates_IgnoresPKIClients(t *testing.T) {
+	records := []Record{
+		{ClientID: "1", EntityAliasName: "abc-123", ClientType: "acme", MountAccessor: "auth_ldap_abc123", Source: "jan.csv"},
+		{ClientID: "2", EntityAliasName: "abc-456", ClientType: "acme", MountAccessor: "auth_ldap_abc123", Source: "jan.csv"},
+		{ClientID: "3", EntityAliasName: "abc-789", MountAccessor: "auth_cert_xyz", Source: "jan.csv"},
+	}
+	groups := FindAliasDuplicates(records)
+	if len(groups) != 0 {
+		t.Errorf("expected no duplicate groups (all PKI/cert), got %d", len(groups))
+	}
+}
+
 // helpers for alias dedup tests
 func clientIDs(records []Record) []string {
 	ids := make([]string, len(records))
