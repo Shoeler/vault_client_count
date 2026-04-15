@@ -237,7 +237,9 @@ CSV FORMAT (Vault activity export):
   Optional column:
     entity_alias_name  (also accepted as: alias_name, entity_alias)
       When present, --dedup-alias collapses records that share the same alias
-      base (everything before the first '-' or '@'), the same mount_accessor,
-      and come from the same source file down to one entry per client.
-      Example: "abc-123" and "abc@corp" on the same mount accessor are one client.`)
+      base (everything before the first '@') in the same source file down to
+      one entry per client, regardless of mount accessor. This handles the same
+      user authenticating via multiple mounts (e.g. LDAP and JWT).
+      Examples: "sbishop" and "sbishop@hashicorp.com" → one client;
+      "sbishop" and "sbishop-t0" → two clients (hyphen is not stripped).`)
 }

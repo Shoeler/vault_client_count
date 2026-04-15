@@ -70,9 +70,11 @@ OPTIONS:
   -dedup-alias
         Deduplicate by entity_alias_name instead of client_id. Two records are
         considered the same client if they share the same alias base (everything
-        before the first '-' or '@'), the same mount_accessor, and come from the
-        same source file. Example: "abc-123" and "abc@corp" on the same mount
-        accessor in the same file both reduce to one client.
+        before the first '@') in the same source file, regardless of mount
+        accessor. This correctly handles the same user authenticating via
+        multiple auth mounts (e.g. LDAP and JWT) appearing as separate records.
+        Examples: "sbishop" and "sbishop@hashicorp.com" → one client;
+        "sbishop" and "sbishop-t0" → two clients (hyphen is not stripped).
         Duplicate groups are printed as a table before the summary.
         Records without an alias are always kept. Mutually exclusive with -d.
   -per-file
