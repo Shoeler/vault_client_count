@@ -190,18 +190,20 @@ func BaseAlias(name string) string {
 }
 
 // aliasKey is the composite deduplication key for alias-based dedup:
-// one record is allowed per base alias per auth method per source file.
+// one record is allowed per base alias per mount accessor per source file.
+// Each additional occurrence of the same base alias on a different mount
+// accessor is a distinct client.
 type aliasKey struct {
-	base       string
-	authMethod string
-	source     string
+	base          string
+	mountAccessor string
+	source        string
 }
 
 func aliasKeyFor(r Record) aliasKey {
 	return aliasKey{
-		base:       BaseAlias(r.EntityAliasName),
-		authMethod: r.AuthMethod,
-		source:     filepath.Base(r.Source),
+		base:          BaseAlias(r.EntityAliasName),
+		mountAccessor: r.MountAccessor,
+		source:        filepath.Base(r.Source),
 	}
 }
 

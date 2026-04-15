@@ -111,8 +111,8 @@ func main() {
 			fmt.Fprintln(os.Stdout, "=====================================")
 			for _, group := range groups {
 				r0 := group[0]
-				fmt.Fprintf(os.Stdout, "\nAlias group: %q  auth: %s  file: %s\n",
-					normalizer.BaseAlias(r0.EntityAliasName), r0.AuthMethod, filepath.Base(r0.Source))
+				fmt.Fprintf(os.Stdout, "\nAlias group: %q  accessor: %s  file: %s\n",
+					normalizer.BaseAlias(r0.EntityAliasName), r0.MountAccessor, filepath.Base(r0.Source))
 				renderer.PrintTable(os.Stdout, group)
 			}
 			fmt.Fprintln(os.Stdout)
@@ -236,6 +236,8 @@ CSV FORMAT (Vault activity export):
 
   Optional column:
     entity_alias_name  (also accepted as: alias_name, entity_alias)
-      When present, --dedup-alias will collapse records that share the same
-      alias name down to one entry per alias.`)
+      When present, --dedup-alias collapses records that share the same alias
+      base (everything before the first '-' or '@'), the same mount_accessor,
+      and come from the same source file down to one entry per client.
+      Example: "abc-123" and "abc@corp" on the same mount accessor are one client.`)
 }

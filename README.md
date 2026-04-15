@@ -62,20 +62,19 @@ OPTIONS:
         A client is considered PKI if client_type=acme (ACME protocol clients
         from the PKI secrets engine) OR mount_accessor starts with auth_cert
         (cert auth method clients). Both types are reported together as "PKI".
-  -since string
-        Exclude records with a token_creation_time before this value
-        (e.g. 2024-01-01 or 2024-01-01T00:00:00Z). Applies to all files.
   -since-file filename=date
         Apply a since filter to one specific file only. May be specified
         multiple times for different files. The filename is matched against
         the base name (e.g. jan.csv=2024-01-15).
   -d    Deduplicate records by client_id across all input files
   -dedup-alias
-        Deduplicate by entity_alias_name instead of client_id. Two aliases are
-        considered the same if their base (everything before the first '-' or '@')
-        matches. Example: "abc-123" and "abc@corp" both reduce to "abc".
-        Matching records are printed before the summary. Records without an alias
-        are always kept. Mutually exclusive with -d.
+        Deduplicate by entity_alias_name instead of client_id. Two records are
+        considered the same client if they share the same alias base (everything
+        before the first '-' or '@'), the same mount_accessor, and come from the
+        same source file. Example: "abc-123" and "abc@corp" on the same mount
+        accessor in the same file both reduce to one client.
+        Duplicate groups are printed as a table before the summary.
+        Records without an alias are always kept. Mutually exclusive with -d.
   -per-file
         Print a summary for each input file before the combined summary
   -debug
