@@ -189,28 +189,44 @@ func BaseAlias(name string) string {
 	return name
 }
 
-// FindAliasDuplicates groups records by their BaseAlias and returns every
-// group that contains more than one record. Records with a blank
-// EntityAliasName are ignored. The groups are returned in the order the first
-// member of each group appeared in records.
+// aliasKey is the composite deduplication key for alias-based dedup:
+// one record is allowed per base alias per auth method per source file.
+type aliasKey struct {
+	base       string
+	authMethod string
+	source     string
+}
+
+func aliasKeyFor(r Record) aliasKey {
+	return aliasKey{
+		base:       BaseAlias(r.EntityAliasName),
+		authMethod: r.AuthMethod,
+		source:     filepath.Base(r.Source),
+	}
+}
+
+// FindAliasDuplicates groups records by (BaseAlias, AuthMethod, source file)
+// and returns every group that contains more than one record. Records with a
+// blank EntityAliasName are ignored. Groups are returned in the order the
+// first member of each group appeared in records.
 func FindAliasDuplicates(records []Record) [][]Record {
 	type entry struct {
-		base    string
+		key     aliasKey
 		members []Record
 	}
-	index := make(map[string]int) // base → position in entries
+	index := make(map[aliasKey]int)
 	var entries []entry
 
 	for _, r := range records {
 		if r.EntityAliasName == "" {
 			continue
 		}
-		base := BaseAlias(r.EntityAliasName)
-		if idx, ok := index[base]; ok {
+		k := aliasKeyFor(r)
+		if idx, ok := index[k]; ok {
 			entries[idx].members = append(entries[idx].members, r)
 		} else {
-			index[base] = len(entries)
-			entries = append(entries, entry{base: base, members: []Record{r}})
+			index[k] = len(entries)
+			entries = append(entries, entry{key: k, members: []Record{r}})
 		}
 	}
 
@@ -223,22 +239,22 @@ func FindAliasDuplicates(records []Record) [][]Record {
 	return out
 }
 
-// DeduplicateByAlias removes records that share the same BaseAlias, keeping
-// the first occurrence per base alias. Records with a blank EntityAliasName
-// are always kept.
+// DeduplicateByAlias keeps at most one record per (BaseAlias, AuthMethod,
+// source file) combination. Records with a blank EntityAliasName are always
+// kept.
 func DeduplicateByAlias(records []Record) []Record {
-	seen := make(map[string]struct{}, len(records))
+	seen := make(map[aliasKey]struct{}, len(records))
 	out := make([]Record, 0, len(records))
 	for _, r := range records {
 		if r.EntityAliasName == "" {
 			out = append(out, r)
 			continue
 		}
-		base := BaseAlias(r.EntityAliasName)
-		if _, dup := seen[base]; dup {
+		k := aliasKeyFor(r)
+		if _, dup := seen[k]; dup {
 			continue
 		}
-		seen[base] = struct{}{}
+		seen[k] = struct{}{}
 		out = append(out, r)
 	}
 	return out
