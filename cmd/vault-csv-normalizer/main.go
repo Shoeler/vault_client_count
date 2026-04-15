@@ -111,8 +111,8 @@ func main() {
 			fmt.Fprintln(os.Stdout, "=====================================")
 			for _, group := range groups {
 				r0 := group[0]
-				fmt.Fprintf(os.Stdout, "\nAlias group: %q  accessor: %s  file: %s\n",
-					normalizer.BaseAlias(r0.EntityAliasName), r0.MountAccessor, filepath.Base(r0.Source))
+				fmt.Fprintf(os.Stdout, "\nAlias group: %q  file: %s\n",
+					normalizer.BaseAlias(r0.EntityAliasName), filepath.Base(r0.Source))
 				renderer.PrintTable(os.Stdout, group)
 			}
 			fmt.Fprintln(os.Stdout)

@@ -4,6 +4,9 @@
 # Claude
 .claude/
 
+# Test data outputs
+testdata/out.csv
+
 # Go build artifacts
 *.exe
 *.test

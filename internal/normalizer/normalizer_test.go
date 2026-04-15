@@ -221,13 +221,12 @@ func TestParseTime_Formats(t *testing.T) {
 
 func TestBaseAlias(t *testing.T) {
 	cases := []struct{ in, want string }{
-		{"abc-123", "abc"},
-		{"abc@234", "abc"},
 		{"alice@corp.com", "alice"},
-		{"user-v2-extra", "user"},
+		{"sbishop@hashicorp.com", "sbishop"},
+		{"abc@234", "abc"},
+		{"sbishop-t0", "sbishop-t0"}, // hyphen NOT stripped
 		{"plain", "plain"},
 		{"", ""},
-		{"-leading", ""},
 		{"@leading", ""},
 	}
 	for _, c := range cases {
@@ -238,29 +237,31 @@ func TestBaseAlias(t *testing.T) {
 	}
 }
 
-func TestDeduplicateByAlias_CollapsesSameBaseAccessorFile(t *testing.T) {
+func TestDeduplicateByAlias_CollapsesSameBaseAcrossAccessors(t *testing.T) {
+	// sbishop@hashicorp.com and sbishop on different mounts → same base "sbishop" → one client.
+	// sbishop-t0 on LDAP and sbishop-t0 on OIDC → same base "sbishop-t0" → one client.
+	// sbishop and sbishop-t0 → different bases → two clients.
 	records := []Record{
-		{ClientID: "1", EntityAliasName: "abc-123", MountAccessor: "auth_ldap_abc123", Source: "jan.csv"},
-		{ClientID: "2", EntityAliasName: "abc@234", MountAccessor: "auth_ldap_abc123", Source: "jan.csv"}, // dup: same base+accessor+file
-		{ClientID: "3", EntityAliasName: "abc-999", MountAccessor: "auth_ldap_abc123", Source: "jan.csv"}, // dup: same base+accessor+file
-		{ClientID: "4", EntityAliasName: "abc-123", MountAccessor: "auth_oidc_def456", Source: "jan.csv"}, // kept: different accessor
-		{ClientID: "5", EntityAliasName: "abc-123", MountAccessor: "auth_ldap_abc123", Source: "feb.csv"}, // kept: different file
-		{ClientID: "6", EntityAliasName: "xyz-001", MountAccessor: "auth_ldap_abc123", Source: "jan.csv"}, // kept: different base
-		{ClientID: "7", EntityAliasName: ""},                                                               // kept: blank always kept
+		{ClientID: "1", EntityAliasName: "sbishop", MountAccessor: "auth_ldap_abc123", Source: "jan.csv"},
+		{ClientID: "2", EntityAliasName: "sbishop@hashicorp.com", MountAccessor: "auth_jwt_def456", Source: "jan.csv"}, // dup: base "sbishop" same file
+		{ClientID: "3", EntityAliasName: "sbishop-t0", MountAccessor: "auth_ldap_abc123", Source: "jan.csv"},           // kept: different base "sbishop-t0"
+		{ClientID: "4", EntityAliasName: "sbishop-t0", MountAccessor: "auth_oidc_xyz789", Source: "jan.csv"},           // dup: base "sbishop-t0" same file
+		{ClientID: "5", EntityAliasName: "sbishop", MountAccessor: "auth_ldap_abc123", Source: "feb.csv"},              // kept: different file
+		{ClientID: "6", EntityAliasName: ""},                                                                            // kept: blank always kept
 	}
 	out := DeduplicateByAlias(records)
-	if len(out) != 5 {
-		t.Fatalf("expected 5 records, got %d: %v", len(out), clientIDs(out))
+	if len(out) != 4 {
+		t.Fatalf("expected 4 records, got %d: %v", len(out), clientIDs(out))
 	}
 	kept := clientIDSet(out)
-	for _, id := range []string{"1", "4", "5", "6", "7"} {
+	for _, id := range []string{"1", "3", "5", "6"} {
 		if !kept[id] {
 			t.Errorf("expected ClientID=%s to be kept", id)
 		}
 	}
-	for _, id := range []string{"2", "3"} {
+	for _, id := range []string{"2", "4"} {
 		if kept[id] {
-			t.Errorf("expected ClientID=%s to be dropped (duplicate base+accessor+file)", id)
+			t.Errorf("expected ClientID=%s to be dropped (duplicate base in same file)", id)
 		}
 	}
 }
@@ -269,7 +270,7 @@ func TestDeduplicateByAlias_KeepsAllBlanks(t *testing.T) {
 	records := []Record{
 		{ClientID: "1", EntityAliasName: ""},
 		{ClientID: "2", EntityAliasName: ""},
-		{ClientID: "3", EntityAliasName: "x-1", MountAccessor: "auth_ldap_abc123", Source: "jan.csv"},
+		{ClientID: "3", EntityAliasName: "alice@corp.com", Source: "jan.csv"},
 	}
 	out := DeduplicateByAlias(records)
 	if len(out) != 3 {
@@ -277,36 +278,36 @@ func TestDeduplicateByAlias_KeepsAllBlanks(t *testing.T) {
 	}
 }
 
-func TestFindAliasDuplicates_SameBaseAccessorFile(t *testing.T) {
+func TestFindAliasDuplicates_SameBaseAcrossAccessors(t *testing.T) {
+	// sbishop on LDAP and sbishop@hashicorp.com on JWT → same base "sbishop" in same file → one group.
+	// sbishop-t0 → different base, not in the group.
 	records := []Record{
-		{ClientID: "1", EntityAliasName: "abc-123", MountAccessor: "auth_ldap_abc123", Source: "jan.csv"},
-		{ClientID: "2", EntityAliasName: "abc@234", MountAccessor: "auth_ldap_abc123", Source: "jan.csv"}, // dup of 1
-		{ClientID: "3", EntityAliasName: "abc-999", MountAccessor: "auth_ldap_abc123", Source: "jan.csv"}, // dup of 1
-		{ClientID: "4", EntityAliasName: "abc-001", MountAccessor: "auth_oidc_def456", Source: "jan.csv"}, // different accessor — not a dup
-		{ClientID: "5", EntityAliasName: "abc-001", MountAccessor: "auth_ldap_abc123", Source: "feb.csv"}, // different file — not a dup
-		{ClientID: "6", EntityAliasName: "xyz-001", MountAccessor: "auth_ldap_abc123", Source: "jan.csv"}, // different base — not a dup
-		{ClientID: "7", EntityAliasName: ""},                                                               // ignored
+		{ClientID: "1", EntityAliasName: "sbishop", MountAccessor: "auth_ldap_abc123", Source: "jan.csv"},
+		{ClientID: "2", EntityAliasName: "sbishop@hashicorp.com", MountAccessor: "auth_jwt_def456", Source: "jan.csv"}, // dup of 1: base "sbishop"
+		{ClientID: "3", EntityAliasName: "sbishop-t0", MountAccessor: "auth_ldap_abc123", Source: "jan.csv"},           // different base — not a dup
+		{ClientID: "4", EntityAliasName: "sbishop", MountAccessor: "auth_ldap_abc123", Source: "feb.csv"},              // different file — not a dup
+		{ClientID: "5", EntityAliasName: ""},                                                                            // ignored
 	}
 	groups := FindAliasDuplicates(records)
 	if len(groups) != 1 {
 		t.Fatalf("expected 1 duplicate group, got %d", len(groups))
 	}
-	if len(groups[0]) != 3 {
-		t.Errorf("expected 3 members in group, got %d", len(groups[0]))
+	if len(groups[0]) != 2 {
+		t.Errorf("expected 2 members in group, got %d", len(groups[0]))
 	}
 	for _, r := range groups[0] {
-		if BaseAlias(r.EntityAliasName) != "abc" || r.MountAccessor != "auth_ldap_abc123" || r.Source != "jan.csv" {
+		if BaseAlias(r.EntityAliasName) != "sbishop" || r.Source != "jan.csv" {
 			t.Errorf("unexpected record in group: %+v", r)
 		}
 	}
 }
 
 func TestFindAliasDuplicates_NoDuplicates(t *testing.T) {
-	// Same base alias but different mount accessors and files — none are duplicates.
+	// Different base aliases and different files — none are duplicates.
 	records := []Record{
-		{ClientID: "1", EntityAliasName: "alice-1", MountAccessor: "auth_ldap_abc123", Source: "jan.csv"},
-		{ClientID: "2", EntityAliasName: "alice-2", MountAccessor: "auth_oidc_def456", Source: "jan.csv"}, // different accessor
-		{ClientID: "3", EntityAliasName: "alice-3", MountAccessor: "auth_ldap_abc123", Source: "feb.csv"}, // different file
+		{ClientID: "1", EntityAliasName: "alice", Source: "jan.csv"},
+		{ClientID: "2", EntityAliasName: "bob", Source: "jan.csv"},   // different base
+		{ClientID: "3", EntityAliasName: "alice", Source: "feb.csv"}, // different file
 		{ClientID: "4", EntityAliasName: ""},
 	}
 	groups := FindAliasDuplicates(records)
@@ -316,14 +317,14 @@ func TestFindAliasDuplicates_NoDuplicates(t *testing.T) {
 }
 
 func TestDeduplicateByAlias_IgnoresPKIClients(t *testing.T) {
-	// PKI records with the same alias base and mount accessor are all kept.
-	// A pair of non-PKI records with the same key are deduplicated normally.
+	// PKI clients are always kept regardless of alias duplication.
+	// Non-PKI clients with the same base alias in the same file are deduplicated.
 	records := []Record{
-		{ClientID: "1", EntityAliasName: "abc-123", ClientType: "acme", MountAccessor: "auth_ldap_abc123", Source: "jan.csv"},
-		{ClientID: "2", EntityAliasName: "abc-456", ClientType: "acme", MountAccessor: "auth_ldap_abc123", Source: "jan.csv"},
-		{ClientID: "3", EntityAliasName: "abc-789", MountAccessor: "auth_cert_xyz", Source: "jan.csv"},      // cert auth — PKI, kept
-		{ClientID: "4", EntityAliasName: "xyz-000", MountAccessor: "auth_ldap_abc123", Source: "jan.csv"},  // non-PKI, first occurrence: kept
-		{ClientID: "5", EntityAliasName: "xyz-999", MountAccessor: "auth_ldap_abc123", Source: "jan.csv"},  // non-PKI dup of 4 (same base xyz): dropped
+		{ClientID: "1", EntityAliasName: "abc-123", ClientType: "acme", Source: "jan.csv"},  // PKI, kept
+		{ClientID: "2", EntityAliasName: "abc-456", ClientType: "acme", Source: "jan.csv"},  // PKI, kept (not deduped)
+		{ClientID: "3", EntityAliasName: "abc-789", MountAccessor: "auth_cert_xyz", Source: "jan.csv"}, // cert auth — PKI, kept
+		{ClientID: "4", EntityAliasName: "alice@corp", Source: "jan.csv"},                   // non-PKI, first: kept
+		{ClientID: "5", EntityAliasName: "alice@example.com", Source: "jan.csv"},            // non-PKI dup: base "alice" already seen, dropped
 	}
 	out := DeduplicateByAlias(records)
 	if len(out) != 4 {
@@ -342,8 +343,8 @@ func TestDeduplicateByAlias_IgnoresPKIClients(t *testing.T) {
 
 func TestFindAliasDuplicates_IgnoresPKIClients(t *testing.T) {
 	records := []Record{
-		{ClientID: "1", EntityAliasName: "abc-123", ClientType: "acme", MountAccessor: "auth_ldap_abc123", Source: "jan.csv"},
-		{ClientID: "2", EntityAliasName: "abc-456", ClientType: "acme", MountAccessor: "auth_ldap_abc123", Source: "jan.csv"},
+		{ClientID: "1", EntityAliasName: "abc-123", ClientType: "acme", Source: "jan.csv"},
+		{ClientID: "2", EntityAliasName: "abc-456", ClientType: "acme", Source: "jan.csv"},
 		{ClientID: "3", EntityAliasName: "abc-789", MountAccessor: "auth_cert_xyz", Source: "jan.csv"},
 	}
 	groups := FindAliasDuplicates(records)

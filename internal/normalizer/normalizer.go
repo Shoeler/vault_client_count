@@ -177,12 +177,13 @@ func Deduplicate(records []Record) []Record {
 	return out
 }
 
-// BaseAlias returns the portion of an entity alias name before the first '-'
-// or '@' character. If neither is present the full name is returned.
-// Example: "abc-123" → "abc", "alice@corp" → "alice", "plain" → "plain".
+// BaseAlias returns the portion of an entity alias name before the first '@'
+// character. If no '@' is present the full name is returned.
+// Example: "alice@corp.com" → "alice", "sbishop@hashicorp.com" → "sbishop",
+// "sbishop-t0" → "sbishop-t0" (hyphen is not stripped).
 func BaseAlias(name string) string {
 	for i, ch := range name {
-		if ch == '-' || ch == '@' {
+		if ch == '@' {
 			return name[:i]
 		}
 	}
@@ -190,27 +191,25 @@ func BaseAlias(name string) string {
 }
 
 // aliasKey is the composite deduplication key for alias-based dedup:
-// one record is allowed per base alias per mount accessor per source file.
-// Each additional occurrence of the same base alias on a different mount
-// accessor is a distinct client.
+// one record is allowed per base alias per source file, regardless of mount
+// accessor. The same user authenticating via multiple mounts in the same file
+// is counted as one client.
 type aliasKey struct {
-	base          string
-	mountAccessor string
-	source        string
+	base   string
+	source string
 }
 
 func aliasKeyFor(r Record) aliasKey {
 	return aliasKey{
-		base:          BaseAlias(r.EntityAliasName),
-		mountAccessor: r.MountAccessor,
-		source:        filepath.Base(r.Source),
+		base:   BaseAlias(r.EntityAliasName),
+		source: filepath.Base(r.Source),
 	}
 }
 
-// FindAliasDuplicates groups records by (BaseAlias, AuthMethod, source file)
-// and returns every group that contains more than one record. Records with a
-// blank EntityAliasName or that are PKI clients are ignored. Groups are
-// returned in the order the first member of each group appeared in records.
+// FindAliasDuplicates groups records by (BaseAlias, source file) and returns
+// every group that contains more than one record. Records with a blank
+// EntityAliasName or that are PKI clients are ignored. Groups are returned in
+// the order the first member of each group appeared in records.
 func FindAliasDuplicates(records []Record) [][]Record {
 	type entry struct {
 		key     aliasKey
@@ -241,9 +240,10 @@ func FindAliasDuplicates(records []Record) [][]Record {
 	return out
 }
 
-// DeduplicateByAlias keeps at most one record per (BaseAlias, AuthMethod,
-// source file) combination. Records with a blank EntityAliasName or that are
-// PKI clients are always kept.
+// DeduplicateByAlias keeps at most one record per (BaseAlias, source file)
+// combination. The same user authenticating via multiple mount accessors in
+// the same file is collapsed to one record. Records with a blank
+// EntityAliasName or that are PKI clients are always kept.
 func DeduplicateByAlias(records []Record) []Record {
 	seen := make(map[aliasKey]struct{}, len(records))
 	out := make([]Record, 0, len(records))
