@@ -43,6 +43,11 @@ var columns = []column{
 		get:    func(r normalizer.Record) string { return r.MountPath },
 	},
 	{
+		header: "Mount Accessor",
+		width:  14,
+		get:    func(r normalizer.Record) string { return r.MountAccessor },
+	},
+	{
 		header: "Token Created",
 		width:  22,
 		get: func(r normalizer.Record) string {
