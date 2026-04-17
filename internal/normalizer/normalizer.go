@@ -201,21 +201,19 @@ func StripTierSuffix(name string) string {
 	return name
 }
 
-// aliasKey is the composite deduplication key for alias-based dedup:
-// one record is allowed per normalized alias per source file, regardless of
-// mount accessor.
+// aliasKey is the deduplication key for alias-based dedup: one record is
+// allowed per normalized alias across all input files.
 type aliasKey struct {
-	base   string
-	source string
+	base string
 }
 
 // aliasKeyFor computes the dedup key for a record. It strips the domain suffix
 // (at '@') and any trailing tier suffix ("-t0"/"-t1"/"-t2") so that e.g.
-// "alice", "alice-t0", and "alice@corp.com" all map to the same key.
+// "alice", "alice-t0", and "alice@corp.com" all map to the same key across
+// all input files.
 func aliasKeyFor(r Record) aliasKey {
 	return aliasKey{
-		base:   StripTierSuffix(BaseAlias(r.EntityAliasName)),
-		source: filepath.Base(r.Source),
+		base: StripTierSuffix(BaseAlias(r.EntityAliasName)),
 	}
 }
 
@@ -286,32 +284,24 @@ func isJWT(r Record) bool {
 // or OIDC identity and again for their JWT identity. Records without an alias
 // are always kept.
 func DeduplicateJWT(records []Record) []Record {
-	// Build per-file set of normalized aliases from non-JWT records.
-	nonJWTAliases := make(map[string]map[string]struct{})
+	// Build global set of normalized aliases from all non-JWT records.
+	nonJWTAliases := make(map[string]struct{})
 	for _, r := range records {
 		if isJWT(r) || r.EntityAliasName == "" {
 			continue
 		}
 		norm := StripTierSuffix(BaseAlias(r.EntityAliasName))
-		if norm == "" {
-			continue
+		if norm != "" {
+			nonJWTAliases[norm] = struct{}{}
 		}
-		src := filepath.Base(r.Source)
-		if nonJWTAliases[src] == nil {
-			nonJWTAliases[src] = make(map[string]struct{})
-		}
-		nonJWTAliases[src][norm] = struct{}{}
 	}
 
 	out := make([]Record, 0, len(records))
 	for _, r := range records {
 		if isJWT(r) && r.EntityAliasName != "" {
 			norm := StripTierSuffix(BaseAlias(r.EntityAliasName))
-			src := filepath.Base(r.Source)
-			if aliases, ok := nonJWTAliases[src]; ok {
-				if _, match := aliases[norm]; match {
-					continue
-				}
+			if _, match := nonJWTAliases[norm]; match {
+				continue
 			}
 		}
 		out = append(out, r)

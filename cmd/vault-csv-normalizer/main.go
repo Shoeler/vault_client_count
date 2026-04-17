@@ -253,11 +253,11 @@ CSV FORMAT (Vault activity export):
   Optional column:
     entity_alias_name  (also accepted as: alias_name, entity_alias)
       When present, --dedup-alias collapses records that share the same
-      normalized alias in the same source file down to one entry per client,
-      regardless of mount accessor. Normalization strips the domain suffix
-      (at '@') and any trailing tier suffix (-t0, -t1, -t2). This handles
-      the same user authenticating via multiple mounts or tiers.
-      Examples: "sbishop", "sbishop-t0", and "sbishop@hashicorp.com" → one client.
+      normalized alias across all input files down to one entry per client,
+      regardless of mount accessor or source file. Normalization strips the
+      domain suffix (at '@') and any trailing tier suffix (-t0, -t1, -t2).
+      Examples: "sbishop" in jan.csv, "sbishop-t0" in feb.csv, and
+      "sbishop@hashicorp.com" in mar.csv → one client.
 
       --dedup-jwt uses the same normalization to match JWT records against
       non-JWT records in the same file. A JWT record is dropped if a non-JWT
