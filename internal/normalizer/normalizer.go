@@ -180,7 +180,7 @@ func Deduplicate(records []Record) []Record {
 // BaseAlias returns the portion of an entity alias name before the first '@'
 // character. If no '@' is present the full name is returned.
 // Example: "alice@corp.com" → "alice", "sbishop@hashicorp.com" → "sbishop",
-// "sbishop-t0" → "sbishop-t0" (hyphen is not stripped).
+// "sbishop-t0" → "sbishop-t0".
 func BaseAlias(name string) string {
 	for i, ch := range name {
 		if ch == '@' {
@@ -190,18 +190,31 @@ func BaseAlias(name string) string {
 	return name
 }
 
+// StripTierSuffix removes a trailing "-t0", "-t1", or "-t2" suffix from name.
+// Other suffixes are left unchanged.
+// Example: "alice-t0" → "alice", "bob-t2" → "bob", "carol-t3" → "carol-t3".
+func StripTierSuffix(name string) string {
+	n := len(name)
+	if n >= 3 && name[n-3] == '-' && name[n-2] == 't' && name[n-1] >= '0' && name[n-1] <= '2' {
+		return name[:n-3]
+	}
+	return name
+}
+
 // aliasKey is the composite deduplication key for alias-based dedup:
-// one record is allowed per base alias per source file, regardless of mount
-// accessor. The same user authenticating via multiple mounts in the same file
-// is counted as one client.
+// one record is allowed per normalized alias per source file, regardless of
+// mount accessor.
 type aliasKey struct {
 	base   string
 	source string
 }
 
+// aliasKeyFor computes the dedup key for a record. It strips the domain suffix
+// (at '@') and any trailing tier suffix ("-t0"/"-t1"/"-t2") so that e.g.
+// "alice", "alice-t0", and "alice@corp.com" all map to the same key.
 func aliasKeyFor(r Record) aliasKey {
 	return aliasKey{
-		base:   BaseAlias(r.EntityAliasName),
+		base:   StripTierSuffix(BaseAlias(r.EntityAliasName)),
 		source: filepath.Base(r.Source),
 	}
 }

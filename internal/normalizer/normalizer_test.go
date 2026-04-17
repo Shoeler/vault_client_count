@@ -224,7 +224,7 @@ func TestBaseAlias(t *testing.T) {
 		{"alice@corp.com", "alice"},
 		{"sbishop@hashicorp.com", "sbishop"},
 		{"abc@234", "abc"},
-		{"sbishop-t0", "sbishop-t0"}, // hyphen NOT stripped
+		{"sbishop-t0", "sbishop-t0"}, // BaseAlias alone does not strip tier
 		{"plain", "plain"},
 		{"", ""},
 		{"@leading", ""},
@@ -237,31 +237,69 @@ func TestBaseAlias(t *testing.T) {
 	}
 }
 
+func TestStripTierSuffix(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"alice-t0", "alice"},
+		{"alice-t1", "alice"},
+		{"alice-t2", "alice"},
+		{"alice-t3", "alice-t3"}, // only t0–t2 are stripped
+		{"alice-t10", "alice-t10"},
+		{"alice-T0", "alice-T0"}, // case-sensitive
+		{"alice", "alice"},
+		{"-t0", ""},   // degenerate: only the suffix
+		{"t0", "t0"},  // no hyphen
+		{"", ""},
+	}
+	for _, c := range cases {
+		got := StripTierSuffix(c.in)
+		if got != c.want {
+			t.Errorf("StripTierSuffix(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestStripTierSuffix_AfterBaseAlias(t *testing.T) {
+	// The combination used by aliasKeyFor: strip domain then tier.
+	cases := []struct{ in, want string }{
+		{"alice-t0@corp.com", "alice"},
+		{"alice-t1@corp.com", "alice"},
+		{"alice@corp.com", "alice"},
+		{"alice-t0", "alice"},
+		{"alice", "alice"},
+	}
+	for _, c := range cases {
+		got := StripTierSuffix(BaseAlias(c.in))
+		if got != c.want {
+			t.Errorf("StripTierSuffix(BaseAlias(%q)) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
 func TestDeduplicateByAlias_CollapsesSameBaseAcrossAccessors(t *testing.T) {
-	// sbishop@hashicorp.com and sbishop on different mounts → same base "sbishop" → one client.
-	// sbishop-t0 on LDAP and sbishop-t0 on OIDC → same base "sbishop-t0" → one client.
-	// sbishop and sbishop-t0 → different bases → two clients.
+	// "sbishop", "sbishop@hashicorp.com", "sbishop-t0", "sbishop-t1" all
+	// normalize to "sbishop" in the same file → only the first is kept.
+	// "sbishop" in a different file is a separate client.
 	records := []Record{
 		{ClientID: "1", EntityAliasName: "sbishop", MountAccessor: "auth_ldap_abc123", Source: "jan.csv"},
-		{ClientID: "2", EntityAliasName: "sbishop@hashicorp.com", MountAccessor: "auth_jwt_def456", Source: "jan.csv"}, // dup: base "sbishop" same file
-		{ClientID: "3", EntityAliasName: "sbishop-t0", MountAccessor: "auth_ldap_abc123", Source: "jan.csv"},           // kept: different base "sbishop-t0"
-		{ClientID: "4", EntityAliasName: "sbishop-t0", MountAccessor: "auth_oidc_xyz789", Source: "jan.csv"},           // dup: base "sbishop-t0" same file
+		{ClientID: "2", EntityAliasName: "sbishop@hashicorp.com", MountAccessor: "auth_jwt_def456", Source: "jan.csv"}, // dup: normalizes to "sbishop"
+		{ClientID: "3", EntityAliasName: "sbishop-t0", MountAccessor: "auth_ldap_abc123", Source: "jan.csv"},           // dup: tier stripped → "sbishop"
+		{ClientID: "4", EntityAliasName: "sbishop-t1", MountAccessor: "auth_oidc_xyz789", Source: "jan.csv"},           // dup: tier stripped → "sbishop"
 		{ClientID: "5", EntityAliasName: "sbishop", MountAccessor: "auth_ldap_abc123", Source: "feb.csv"},              // kept: different file
 		{ClientID: "6", EntityAliasName: ""},                                                                            // kept: blank always kept
 	}
 	out := DeduplicateByAlias(records)
-	if len(out) != 4 {
-		t.Fatalf("expected 4 records, got %d: %v", len(out), clientIDs(out))
+	if len(out) != 3 {
+		t.Fatalf("expected 3 records, got %d: %v", len(out), clientIDs(out))
 	}
 	kept := clientIDSet(out)
-	for _, id := range []string{"1", "3", "5", "6"} {
+	for _, id := range []string{"1", "5", "6"} {
 		if !kept[id] {
 			t.Errorf("expected ClientID=%s to be kept", id)
 		}
 	}
-	for _, id := range []string{"2", "4"} {
+	for _, id := range []string{"2", "3", "4"} {
 		if kept[id] {
-			t.Errorf("expected ClientID=%s to be dropped (duplicate base in same file)", id)
+			t.Errorf("expected ClientID=%s to be dropped (normalizes to same tier base in same file)", id)
 		}
 	}
 }
@@ -279,12 +317,13 @@ func TestDeduplicateByAlias_KeepsAllBlanks(t *testing.T) {
 }
 
 func TestFindAliasDuplicates_SameBaseAcrossAccessors(t *testing.T) {
-	// sbishop on LDAP and sbishop@hashicorp.com on JWT → same base "sbishop" in same file → one group.
-	// sbishop-t0 → different base, not in the group.
+	// "sbishop", "sbishop@hashicorp.com", and "sbishop-t0" all normalize to
+	// "sbishop" in the same file → one group with 3 members.
+	// "sbishop" in a different file and blank aliases are not included.
 	records := []Record{
 		{ClientID: "1", EntityAliasName: "sbishop", MountAccessor: "auth_ldap_abc123", Source: "jan.csv"},
-		{ClientID: "2", EntityAliasName: "sbishop@hashicorp.com", MountAccessor: "auth_jwt_def456", Source: "jan.csv"}, // dup of 1: base "sbishop"
-		{ClientID: "3", EntityAliasName: "sbishop-t0", MountAccessor: "auth_ldap_abc123", Source: "jan.csv"},           // different base — not a dup
+		{ClientID: "2", EntityAliasName: "sbishop@hashicorp.com", MountAccessor: "auth_jwt_def456", Source: "jan.csv"}, // dup: base "sbishop"
+		{ClientID: "3", EntityAliasName: "sbishop-t0", MountAccessor: "auth_ldap_abc123", Source: "jan.csv"},           // dup: tier stripped → "sbishop"
 		{ClientID: "4", EntityAliasName: "sbishop", MountAccessor: "auth_ldap_abc123", Source: "feb.csv"},              // different file — not a dup
 		{ClientID: "5", EntityAliasName: ""},                                                                            // ignored
 	}
@@ -292,11 +331,11 @@ func TestFindAliasDuplicates_SameBaseAcrossAccessors(t *testing.T) {
 	if len(groups) != 1 {
 		t.Fatalf("expected 1 duplicate group, got %d", len(groups))
 	}
-	if len(groups[0]) != 2 {
-		t.Errorf("expected 2 members in group, got %d", len(groups[0]))
+	if len(groups[0]) != 3 {
+		t.Errorf("expected 3 members in group, got %d", len(groups[0]))
 	}
 	for _, r := range groups[0] {
-		if BaseAlias(r.EntityAliasName) != "sbishop" || r.Source != "jan.csv" {
+		if StripTierSuffix(BaseAlias(r.EntityAliasName)) != "sbishop" || r.Source != "jan.csv" {
 			t.Errorf("unexpected record in group: %+v", r)
 		}
 	}
@@ -625,6 +664,63 @@ func TestFilterSincePerSource_EmptyMap(t *testing.T) {
 	got := FilterSincePerSource(records, nil)
 	if len(got) != 1 {
 		t.Error("empty sinceBySource should return all records unchanged")
+	}
+}
+
+// ── combined alias + client_id deduplication ─────────────────────────────────
+
+func TestDeduplicateByAlias_ThenDeduplicate_CollapsesBothDimensions(t *testing.T) {
+	// --dedup-alias runs first (within-file tier/domain collapse), then -d
+	// (cross-file client_id collapse). Together they handle the case where the
+	// same person appears as different alias variants in the same file AND as the
+	// same client_id across multiple files.
+	//
+	// jan.csv: alice (id:1) and alice-t0 (id:2) → alias dedup keeps id:1, drops id:2
+	// feb.csv: alice (id:1) → same client_id as jan.csv survivor → -d drops it
+	// jan.csv: bob (id:3) → distinct alias and id → kept throughout
+	records := []Record{
+		{ClientID: "1", EntityAliasName: "alice", Source: "jan.csv"},
+		{ClientID: "2", EntityAliasName: "alice-t0", Source: "jan.csv"}, // dropped by alias dedup (tier → "alice")
+		{ClientID: "1", EntityAliasName: "alice", Source: "feb.csv"},    // dropped by -d (same id as jan survivor)
+		{ClientID: "3", EntityAliasName: "bob", Source: "jan.csv"},
+	}
+
+	afterAlias := DeduplicateByAlias(records)
+	afterBoth := Deduplicate(afterAlias)
+
+	if len(afterBoth) != 2 {
+		t.Fatalf("expected 2 records, got %d: %v", len(afterBoth), clientIDs(afterBoth))
+	}
+	kept := clientIDSet(afterBoth)
+	if !kept["1"] {
+		t.Error("expected id:1 to be kept")
+	}
+	if !kept["3"] {
+		t.Error("expected id:3 to be kept")
+	}
+	if kept["2"] {
+		t.Error("expected id:2 to be dropped by alias dedup")
+	}
+}
+
+func TestDeduplicateByAlias_ThenDeduplicate_AliasDedupsWithinFileOnly(t *testing.T) {
+	// Alias dedup is scoped to the source file, so the same tier variants in
+	// different files each survive alias dedup as distinct records. -d then
+	// deduplicates by client_id across files.
+	//
+	// jan.csv: alice-t0 (id:1) — only variant in jan.csv, kept by alias dedup
+	// feb.csv: alice-t1 (id:2) — only variant in feb.csv, kept by alias dedup
+	// After -d: id:1 and id:2 are different client_ids, both kept.
+	records := []Record{
+		{ClientID: "1", EntityAliasName: "alice-t0", Source: "jan.csv"},
+		{ClientID: "2", EntityAliasName: "alice-t1", Source: "feb.csv"},
+	}
+
+	afterAlias := DeduplicateByAlias(records)
+	afterBoth := Deduplicate(afterAlias)
+
+	if len(afterBoth) != 2 {
+		t.Fatalf("expected 2 records (different ids, different files), got %d", len(afterBoth))
 	}
 }
 

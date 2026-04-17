@@ -18,7 +18,7 @@ versions), and displays a summary of client counts by mount path and type.
 - Normalizes **namespace paths** (empty/`root` → `[root]`, ensures trailing `/`)
 - Normalizes **mount paths** (ensures trailing `/`)
 - Normalizes **timestamps** to UTC across all common Vault timestamp formats
-- **Deduplicates** clients across files by `client_id` when `-d` is set, or by `entity_alias_name` base (`--dedup-alias`)
+- **Deduplicates** clients across files by `client_id` when `-d` is set, or by normalized `entity_alias_name` (`--dedup-alias`), which strips domain suffixes (`@corp.com`) and tier suffixes (`-t0`/`-t1`/`-t2`)
 - **Filters** by namespace (substring) or client type
 - **Sorts** by any column
 - Prints a **summary** with counts broken down by mount path and client type
@@ -66,17 +66,19 @@ OPTIONS:
         Apply a since filter to one specific file only. May be specified
         multiple times for different files. The filename is matched against
         the base name (e.g. jan.csv=2024-01-15).
-  -d    Deduplicate records by client_id across all input files
+  -d    Deduplicate records by client_id across all input files.
   -dedup-alias
-        Deduplicate by entity_alias_name instead of client_id. Two records are
-        considered the same client if they share the same alias base (everything
-        before the first '@') in the same source file, regardless of mount
-        accessor. This correctly handles the same user authenticating via
-        multiple auth mounts (e.g. LDAP and JWT) appearing as separate records.
-        Examples: "sbishop" and "sbishop@hashicorp.com" → one client;
-        "sbishop" and "sbishop-t0" → two clients (hyphen is not stripped).
+        Deduplicate by entity_alias_name within each source file. Two records
+        are considered the same client if they share the same normalized alias
+        in the same file, regardless of mount accessor. Normalization strips the
+        domain suffix (at '@') and any trailing tier suffix (-t0, -t1, -t2).
+        Examples: "sbishop", "sbishop-t0", "sbishop-t1", and
+        "sbishop@corp.com" are all treated as one client.
         Duplicate groups are printed as a table before the summary.
-        Records without an alias are always kept. Mutually exclusive with -d.
+        Records without an alias are always kept.
+        May be combined with -d: alias dedup runs first (collapses tier/domain
+        variants within each file), then -d deduplicates by client_id across
+        files.
   -per-file
         Print a summary for each input file before the combined summary
   -debug
@@ -129,8 +131,13 @@ vault-csv-normalizer -f export.csv --debug
 # Deduplicate client_ids across files
 vault-csv-normalizer -f jan.csv feb.csv -d
 
-# Deduplicate by entity alias base (strips after '-' or '@')
+# Deduplicate by entity alias — strips domain (@corp.com) and tier (-t0/-t1/-t2)
+# "alice", "alice-t0", "alice-t1", "alice@corp.com" → counted as one client per file
 vault-csv-normalizer -f jan.csv feb.csv --dedup-alias
+
+# Combine both: alias dedup collapses tier/domain variants within each file,
+# then -d deduplicates the same client_id appearing across multiple files
+vault-csv-normalizer -f jan.csv feb.csv --dedup-alias -d
 
 # Exclude records created before 2024-06-01
 vault-csv-normalizer -f export.csv --since 2024-06-01
@@ -199,7 +206,7 @@ The tool expects CSVs exported from the Vault activity export API
 | `client_type`            | No       | Type of client (entity, non-entity, acme, etc.)  |
 | `token_creation_time`    | No       | RFC3339 timestamp of token creation              |
 | `client_first_usage_time`| No       | RFC3339 timestamp of first authenticated call    |
-| `entity_alias_name`      | No       | Human-readable alias for the entity (used by `--dedup-alias`) |
+| `entity_alias_name`      | No       | Human-readable alias for the entity (used by `--dedup-alias`; domain and tier suffixes are stripped during normalization) |
 
 ### Supported Column Aliases
 

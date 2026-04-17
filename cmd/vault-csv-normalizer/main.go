@@ -58,7 +58,7 @@ func main() {
 	flag.Var(&filterSinceFile, "since-file", "Apply a since filter to one file only: filename=date. May be specified multiple times for different files.")
 	flag.BoolVar(&countPKI, "p", false, "Partition and report PKI/cert clients (client_type=acme or mount_accessor prefix auth_cert) separately")
 	flag.BoolVar(&dedup, "d", false, "Deduplicate records by client_id across all input files")
-	flag.BoolVar(&dedupAlias, "dedup-alias", false, "Deduplicate by entity_alias_name instead of client_id (records without an alias are always kept)")
+	flag.BoolVar(&dedupAlias, "dedup-alias", false, "Deduplicate by entity_alias_name (strips domain and -t0/-t1/-t2 tier suffixes; records without an alias are always kept; may be combined with -d)")
 	flag.BoolVar(&debugMode, "debug", false, "Print a table of all records with no mount path")
 	flag.BoolVar(&perFile, "per-file", false, "Print a summary for each input file before the combined summary")
 	flag.BoolVar(&showHelp, "help", false, "Show usage information")
@@ -103,8 +103,7 @@ func main() {
 		}
 		normalized = normalizer.FilterSincePerSource(normalized, sinceByKey)
 	}
-	switch {
-	case dedupAlias:
+	if dedupAlias {
 		groups := normalizer.FindAliasDuplicates(normalized)
 		if len(groups) > 0 {
 			fmt.Fprintf(os.Stdout, "Alias duplicates found (%d group(s))\n", len(groups))
@@ -112,13 +111,14 @@ func main() {
 			for _, group := range groups {
 				r0 := group[0]
 				fmt.Fprintf(os.Stdout, "\nAlias group: %q  file: %s\n",
-					normalizer.BaseAlias(r0.EntityAliasName), filepath.Base(r0.Source))
+					normalizer.StripTierSuffix(normalizer.BaseAlias(r0.EntityAliasName)), filepath.Base(r0.Source))
 				renderer.PrintTable(os.Stdout, group)
 			}
 			fmt.Fprintln(os.Stdout)
 		}
 		normalized = normalizer.DeduplicateByAlias(normalized)
-	case dedup:
+	}
+	if dedup {
 		normalized = normalizer.Deduplicate(normalized)
 	}
 
@@ -236,10 +236,10 @@ CSV FORMAT (Vault activity export):
 
   Optional column:
     entity_alias_name  (also accepted as: alias_name, entity_alias)
-      When present, --dedup-alias collapses records that share the same alias
-      base (everything before the first '@') in the same source file down to
-      one entry per client, regardless of mount accessor. This handles the same
-      user authenticating via multiple mounts (e.g. LDAP and JWT).
-      Examples: "sbishop" and "sbishop@hashicorp.com" → one client;
-      "sbishop" and "sbishop-t0" → two clients (hyphen is not stripped).`)
+      When present, --dedup-alias collapses records that share the same
+      normalized alias in the same source file down to one entry per client,
+      regardless of mount accessor. Normalization strips the domain suffix
+      (at '@') and any trailing tier suffix (-t0, -t1, -t2). This handles
+      the same user authenticating via multiple mounts or tiers.
+      Examples: "sbishop", "sbishop-t0", and "sbishop@hashicorp.com" → one client.`)
 }
