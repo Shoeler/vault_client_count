@@ -68,21 +68,24 @@ OPTIONS:
         the base name (e.g. jan.csv=2024-01-15).
   -d    Deduplicate records by client_id across all input files.
   -dedup-alias
-        Deduplicate by entity_alias_name across all input files. Two records
-        are considered the same client if they share the same normalized alias,
-        regardless of mount accessor or which file they came from. Normalization
-        strips the domain suffix (at '@') and any trailing tier suffix
-        (-t0, -t1, -t2), so "sbishop", "sbishop-t0" in one file, and
-        "sbishop-t1" in another file are all treated as one client.
+        Deduplicate by entity_alias_name within the same auth method across all
+        input files. Two records are considered the same client if they share
+        the same normalized alias AND the same mount type, regardless of mount
+        accessor or source file. Normalization strips the domain suffix (at '@')
+        and any trailing tier suffix (-t0, -t1, -t2), so "sbishop",
+        "sbishop-t0" in one file, and "sbishop-t1" in another are treated as
+        one LDAP client — but a JWT record for "sbishop@corp.com" is left
+        untouched (different mount type). Use --dedup-jwt to additionally
+        collapse across auth methods.
         Duplicate groups are printed as a table before the summary.
         Records without an alias are always kept. May be combined with -d.
   -dedup-jwt
-        Drop JWT records whose normalized alias matches a non-JWT record in any
-        input file. Uses the same normalization as --dedup-alias (strips
+        Drop JWT records whose normalized alias matches a non-JWT record across
+        any input file. Uses the same normalization as --dedup-alias (strips
         '@domain' and '-t0'/'-t1'/'-t2'). Prevents the same person from being
-        counted twice when they authenticate via both LDAP/OIDC and JWT across
-        any combination of input files. Records without an alias are always
-        kept. May be combined with --dedup-alias and/or -d.
+        counted twice when they authenticate via both LDAP/OIDC and JWT.
+        Records without an alias are always kept. May be combined with
+        --dedup-alias and/or -d.
   -per-file
         Print a summary for each input file before the combined summary
   -debug

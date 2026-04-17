@@ -202,18 +202,25 @@ func StripTierSuffix(name string) string {
 }
 
 // aliasKey is the deduplication key for alias-based dedup: one record is
-// allowed per normalized alias across all input files.
+// allowed per (normalized alias, mount type) pair across all input files.
+// Including the mount type prevents --dedup-alias from collapsing records
+// across different auth methods (e.g. LDAP vs JWT); use --dedup-jwt for that.
 type aliasKey struct {
-	base string
+	base      string
+	mountType string
 }
 
 // aliasKeyFor computes the dedup key for a record. It strips the domain suffix
-// (at '@') and any trailing tier suffix ("-t0"/"-t1"/"-t2") so that e.g.
-// "alice", "alice-t0", and "alice@corp.com" all map to the same key across
-// all input files.
+// (at '@') and any trailing tier suffix ("-t0"/"-t1"/"-t2"), and scopes the
+// key to the mount type so that only records of the same auth method collapse.
 func aliasKeyFor(r Record) aliasKey {
+	mt := r.MountType
+	if mt == "" {
+		mt = r.AuthMethod
+	}
 	return aliasKey{
-		base: StripTierSuffix(BaseAlias(r.EntityAliasName)),
+		base:      StripTierSuffix(BaseAlias(r.EntityAliasName)),
+		mountType: mt,
 	}
 }
 

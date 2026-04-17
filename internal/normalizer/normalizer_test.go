@@ -807,6 +807,33 @@ func TestDeduplicateByAlias_CollapsesAcrossFiles(t *testing.T) {
 	}
 }
 
+func TestDeduplicateByAlias_ScopedToMountType(t *testing.T) {
+	// alice on LDAP and alice@corp.com on JWT share a normalized alias but have
+	// different mount types → --dedup-alias does NOT collapse them. Use
+	// --dedup-jwt to additionally collapse cross-auth-method duplicates.
+	// alice-t0 and alice on LDAP share both the normalized alias AND mount type
+	// → they ARE collapsed.
+	records := []Record{
+		{ClientID: "1", EntityAliasName: "alice", MountType: "ldap", Source: "jan.csv"},
+		{ClientID: "2", EntityAliasName: "alice-t0", MountType: "ldap", Source: "jan.csv"},    // dup: same type + base
+		{ClientID: "3", EntityAliasName: "alice@corp.com", MountType: "jwt", Source: "jan.csv"}, // kept: different mount type
+	}
+	out := DeduplicateByAlias(records)
+	if len(out) != 2 {
+		t.Fatalf("expected 2 records (alice/ldap + alice/jwt), got %d: %v", len(out), clientIDs(out))
+	}
+	kept := clientIDSet(out)
+	if !kept["1"] {
+		t.Error("expected id:1 (alice ldap) to be kept")
+	}
+	if !kept["3"] {
+		t.Error("expected id:3 (alice jwt) to be kept — different mount type, requires --dedup-jwt")
+	}
+	if kept["2"] {
+		t.Error("expected id:2 (alice-t0 ldap) to be dropped — same mount type and normalized alias")
+	}
+}
+
 // Regression: tiered accounts across files must be collapsed.
 // Before the fix, aliasKey included the source filename, so alice-t0 in
 // jan.csv and alice in feb.csv hashed to different keys and were never
