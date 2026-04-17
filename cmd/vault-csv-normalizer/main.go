@@ -59,7 +59,7 @@ func main() {
 	flag.BoolVar(&countPKI, "p", false, "Partition and report PKI/cert clients (client_type=acme or mount_accessor prefix auth_cert) separately")
 	flag.BoolVar(&dedup, "d", false, "Deduplicate records by client_id across all input files")
 	flag.BoolVar(&dedupAlias, "dedup-alias", false, "Deduplicate by entity_alias_name (strips domain and -t0/-t1/-t2 tier suffixes; records without an alias are always kept; may be combined with -d)")
-	flag.BoolVar(&debugMode, "debug", false, "Print a table of all records with no mount path")
+	flag.BoolVar(&debugMode, "debug", false, "Print all records grouped by mount path")
 	flag.BoolVar(&perFile, "per-file", false, "Print a summary for each input file before the combined summary")
 	flag.BoolVar(&showHelp, "help", false, "Show usage information")
 	flag.Parse()
@@ -145,15 +145,26 @@ func main() {
 	}
 
 	if debugMode {
-		var noMount []normalizer.Record
+		// Group records by mount path, preserving summary sort order.
+		var mountOrder []string
+		byMount := make(map[string][]normalizer.Record)
 		for _, r := range normalized {
-			if r.MountPath == "" {
-				noMount = append(noMount, r)
+			mp := r.MountPath
+			if mp == "" {
+				mp = "(no mount)"
 			}
+			if _, seen := byMount[mp]; !seen {
+				mountOrder = append(mountOrder, mp)
+			}
+			byMount[mp] = append(byMount[mp], r)
 		}
-		fmt.Fprintf(os.Stdout, "Debug: (no mount) records (%d)\n", len(noMount))
-		fmt.Fprintln(os.Stdout, "==================================")
-		renderer.PrintTable(os.Stdout, noMount)
+		fmt.Fprintf(os.Stdout, "Debug: records by mount path (%d mount(s))\n", len(mountOrder))
+		fmt.Fprintln(os.Stdout, "==========================================")
+		for _, mp := range mountOrder {
+			group := byMount[mp]
+			fmt.Fprintf(os.Stdout, "\nMount: %s (%d record(s))\n", mp, len(group))
+			renderer.PrintTable(os.Stdout, group)
+		}
 		fmt.Fprintln(os.Stdout)
 	}
 

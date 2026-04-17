@@ -82,7 +82,8 @@ OPTIONS:
   -per-file
         Print a summary for each input file before the combined summary
   -debug
-        Print a table of all records with no mount path
+        Print all records grouped by mount path, with a full record table under
+        each mount. Records with no mount path are grouped as "(no mount)".
   -help
         Show usage information
 ```
@@ -125,7 +126,7 @@ vault-csv-normalizer -f jan.csv feb.csv \
 # Per-file breakdown before the combined summary
 vault-csv-normalizer -f jan.csv feb.csv --per-file
 
-# Debug: show all records with no mount path
+# Debug: show all records grouped by mount path
 vault-csv-normalizer -f export.csv --debug
 
 # Deduplicate client_ids across files
