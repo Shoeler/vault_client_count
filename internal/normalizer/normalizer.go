@@ -275,6 +275,50 @@ func DeduplicateByAlias(records []Record) []Record {
 	return out
 }
 
+// isJWT reports whether r was authenticated via JWT.
+func isJWT(r Record) bool {
+	return r.MountType == "jwt" || r.AuthMethod == "jwt"
+}
+
+// DeduplicateJWT drops JWT records whose normalized alias (StripTierSuffix +
+// BaseAlias) matches a non-JWT record's normalized alias in the same source
+// file. This prevents the same person from being counted once for their LDAP
+// or OIDC identity and again for their JWT identity. Records without an alias
+// are always kept.
+func DeduplicateJWT(records []Record) []Record {
+	// Build per-file set of normalized aliases from non-JWT records.
+	nonJWTAliases := make(map[string]map[string]struct{})
+	for _, r := range records {
+		if isJWT(r) || r.EntityAliasName == "" {
+			continue
+		}
+		norm := StripTierSuffix(BaseAlias(r.EntityAliasName))
+		if norm == "" {
+			continue
+		}
+		src := filepath.Base(r.Source)
+		if nonJWTAliases[src] == nil {
+			nonJWTAliases[src] = make(map[string]struct{})
+		}
+		nonJWTAliases[src][norm] = struct{}{}
+	}
+
+	out := make([]Record, 0, len(records))
+	for _, r := range records {
+		if isJWT(r) && r.EntityAliasName != "" {
+			norm := StripTierSuffix(BaseAlias(r.EntityAliasName))
+			src := filepath.Base(r.Source)
+			if aliases, ok := nonJWTAliases[src]; ok {
+				if _, match := aliases[norm]; match {
+					continue
+				}
+			}
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
 // IsPKIClient reports whether r is a PKI/cert client. It matches on either:
 //   - client_type == "acme" (ACME protocol clients from the PKI secrets engine), or
 //   - mount_accessor starting with "auth_cert" (cert auth method clients)

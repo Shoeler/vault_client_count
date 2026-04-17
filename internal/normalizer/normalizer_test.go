@@ -667,6 +667,90 @@ func TestFilterSincePerSource_EmptyMap(t *testing.T) {
 	}
 }
 
+// ── JWT deduplication ─────────────────────────────────────────────────────────
+
+func TestDeduplicateJWT_DropsJWTMatchingNonJWT(t *testing.T) {
+	// alice authenticates via LDAP (kept) and JWT (dropped — same normalized alias).
+	// bob has only a JWT record (kept — no non-JWT match).
+	// carol has a JWT record with no alias (always kept).
+	records := []Record{
+		{ClientID: "1", EntityAliasName: "alice", MountType: "ldap", Source: "jan.csv"},
+		{ClientID: "2", EntityAliasName: "alice@corp.com", MountType: "jwt", Source: "jan.csv"}, // dropped: normalizes to "alice", matches LDAP
+		{ClientID: "3", EntityAliasName: "bob@corp.com", MountType: "jwt", Source: "jan.csv"},   // kept: no non-JWT match for "bob"
+		{ClientID: "4", EntityAliasName: "", MountType: "jwt", Source: "jan.csv"},               // kept: blank alias always kept
+	}
+	out := DeduplicateJWT(records)
+	if len(out) != 3 {
+		t.Fatalf("expected 3 records, got %d: %v", len(out), clientIDs(out))
+	}
+	kept := clientIDSet(out)
+	for _, id := range []string{"1", "3", "4"} {
+		if !kept[id] {
+			t.Errorf("expected ClientID=%s to be kept", id)
+		}
+	}
+	if kept["2"] {
+		t.Error("expected ClientID=2 (JWT dup of LDAP alice) to be dropped")
+	}
+}
+
+func TestDeduplicateJWT_TierNormalizationApplied(t *testing.T) {
+	// LDAP alias is "alice-t0" (normalizes to "alice").
+	// JWT alias is "alice@corp.com" (normalizes to "alice").
+	// They match → JWT dropped.
+	records := []Record{
+		{ClientID: "1", EntityAliasName: "alice-t0", MountType: "ldap", Source: "jan.csv"},
+		{ClientID: "2", EntityAliasName: "alice@corp.com", MountType: "jwt", Source: "jan.csv"},
+	}
+	out := DeduplicateJWT(records)
+	if len(out) != 1 {
+		t.Fatalf("expected 1 record, got %d: %v", len(out), clientIDs(out))
+	}
+	if out[0].ClientID != "1" {
+		t.Errorf("expected LDAP record to be kept, got ClientID=%s", out[0].ClientID)
+	}
+}
+
+func TestDeduplicateJWT_ScopedToSourceFile(t *testing.T) {
+	// JWT record in feb.csv matches an LDAP alias in jan.csv — different files,
+	// so the JWT record is kept.
+	records := []Record{
+		{ClientID: "1", EntityAliasName: "alice", MountType: "ldap", Source: "jan.csv"},
+		{ClientID: "2", EntityAliasName: "alice@corp.com", MountType: "jwt", Source: "feb.csv"},
+	}
+	out := DeduplicateJWT(records)
+	if len(out) != 2 {
+		t.Fatalf("expected 2 records (different files), got %d", len(out))
+	}
+}
+
+func TestDeduplicateJWT_AuthMethodFallback(t *testing.T) {
+	// JWT identified via auth_method rather than mount_type.
+	records := []Record{
+		{ClientID: "1", EntityAliasName: "alice", AuthMethod: "ldap", Source: "jan.csv"},
+		{ClientID: "2", EntityAliasName: "alice@corp.com", AuthMethod: "jwt", Source: "jan.csv"},
+	}
+	out := DeduplicateJWT(records)
+	if len(out) != 1 {
+		t.Fatalf("expected 1 record, got %d: %v", len(out), clientIDs(out))
+	}
+	if out[0].ClientID != "1" {
+		t.Errorf("expected LDAP record kept, got ClientID=%s", out[0].ClientID)
+	}
+}
+
+func TestDeduplicateJWT_NonJWTRecordsUnaffected(t *testing.T) {
+	// No JWT records — nothing should be dropped.
+	records := []Record{
+		{ClientID: "1", EntityAliasName: "alice", MountType: "ldap", Source: "jan.csv"},
+		{ClientID: "2", EntityAliasName: "bob", MountType: "oidc", Source: "jan.csv"},
+	}
+	out := DeduplicateJWT(records)
+	if len(out) != 2 {
+		t.Fatalf("expected 2 records, got %d", len(out))
+	}
+}
+
 // ── combined alias + client_id deduplication ─────────────────────────────────
 
 func TestDeduplicateByAlias_ThenDeduplicate_CollapsesBothDimensions(t *testing.T) {

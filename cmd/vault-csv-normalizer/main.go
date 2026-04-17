@@ -46,6 +46,7 @@ func main() {
 	var countPKI bool
 	var dedup bool
 	var dedupAlias bool
+	var dedupJWT bool
 	var debugMode bool
 	var perFile bool
 	var showHelp bool
@@ -59,6 +60,7 @@ func main() {
 	flag.BoolVar(&countPKI, "p", false, "Partition and report PKI/cert clients (client_type=acme or mount_accessor prefix auth_cert) separately")
 	flag.BoolVar(&dedup, "d", false, "Deduplicate records by client_id across all input files")
 	flag.BoolVar(&dedupAlias, "dedup-alias", false, "Deduplicate by entity_alias_name (strips domain and -t0/-t1/-t2 tier suffixes; records without an alias are always kept; may be combined with -d)")
+	flag.BoolVar(&dedupJWT, "dedup-jwt", false, "Drop JWT records whose normalized alias matches a non-JWT record in the same file (prevents counting the same person via both LDAP/OIDC and JWT)")
 	flag.BoolVar(&debugMode, "debug", false, "Print all records grouped by mount path")
 	flag.BoolVar(&perFile, "per-file", false, "Print a summary for each input file before the combined summary")
 	flag.BoolVar(&showHelp, "help", false, "Show usage information")
@@ -120,6 +122,9 @@ func main() {
 	}
 	if dedup {
 		normalized = normalizer.Deduplicate(normalized)
+	}
+	if dedupJWT {
+		normalized = normalizer.DeduplicateJWT(normalized)
 	}
 
 	// Apply filters.
@@ -252,5 +257,11 @@ CSV FORMAT (Vault activity export):
       regardless of mount accessor. Normalization strips the domain suffix
       (at '@') and any trailing tier suffix (-t0, -t1, -t2). This handles
       the same user authenticating via multiple mounts or tiers.
-      Examples: "sbishop", "sbishop-t0", and "sbishop@hashicorp.com" → one client.`)
+      Examples: "sbishop", "sbishop-t0", and "sbishop@hashicorp.com" → one client.
+
+      --dedup-jwt uses the same normalization to match JWT records against
+      non-JWT records in the same file. A JWT record is dropped if a non-JWT
+      record (e.g. LDAP or OIDC) shares the same normalized alias, preventing
+      the same person from being counted twice when they authenticate via both
+      methods. Can be combined with --dedup-alias and/or -d.`)
 }

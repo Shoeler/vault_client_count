@@ -79,6 +79,13 @@ OPTIONS:
         May be combined with -d: alias dedup runs first (collapses tier/domain
         variants within each file), then -d deduplicates by client_id across
         files.
+  -dedup-jwt
+        Drop JWT records whose normalized alias matches a non-JWT record in the
+        same source file. Uses the same normalization as --dedup-alias (strips
+        '@domain' and '-t0'/'-t1'/'-t2'). Prevents the same person from being
+        counted twice when they authenticate via both LDAP/OIDC and JWT.
+        Records without an alias are always kept. May be combined with
+        --dedup-alias and/or -d.
   -per-file
         Print a summary for each input file before the combined summary
   -debug
@@ -139,6 +146,12 @@ vault-csv-normalizer -f jan.csv feb.csv --dedup-alias
 # Combine both: alias dedup collapses tier/domain variants within each file,
 # then -d deduplicates the same client_id appearing across multiple files
 vault-csv-normalizer -f jan.csv feb.csv --dedup-alias -d
+
+# Drop JWT records where the same person already appears via LDAP or OIDC
+vault-csv-normalizer -f export.csv --dedup-jwt
+
+# Full dedup: collapse tiers, dedup client_ids, then drop redundant JWT records
+vault-csv-normalizer -f jan.csv feb.csv --dedup-alias -d --dedup-jwt
 
 # Exclude records created before 2024-06-01
 vault-csv-normalizer -f export.csv --since 2024-06-01
