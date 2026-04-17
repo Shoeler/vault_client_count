@@ -807,6 +807,34 @@ func TestDeduplicateByAlias_CollapsesAcrossFiles(t *testing.T) {
 	}
 }
 
+func TestDeduplicateByAlias_CollapseOIDCWithLDAP(t *testing.T) {
+	// LDAP and OIDC share the same identity group, so the same normalized alias
+	// across both auth methods is treated as one client.
+	// JWT remains a separate group and is not collapsed here.
+	records := []Record{
+		{ClientID: "1", EntityAliasName: "alice", MountType: "ldap", Source: "jan.csv"},
+		{ClientID: "2", EntityAliasName: "alice@corp.com", MountType: "oidc", Source: "jan.csv"},  // dup: ldap/oidc group, normalizes to "alice"
+		{ClientID: "3", EntityAliasName: "alice-t0", MountType: "ldap", Source: "feb.csv"},        // dup: ldap/oidc group, tier stripped → "alice"
+		{ClientID: "4", EntityAliasName: "alice@corp.com", MountType: "jwt", Source: "jan.csv"},   // kept: jwt is a separate group
+		{ClientID: "5", EntityAliasName: "bob", MountType: "ldap", Source: "jan.csv"},             // kept: different alias
+	}
+	out := DeduplicateByAlias(records)
+	if len(out) != 3 {
+		t.Fatalf("expected 3 records, got %d: %v", len(out), clientIDs(out))
+	}
+	kept := clientIDSet(out)
+	for _, id := range []string{"1", "4", "5"} {
+		if !kept[id] {
+			t.Errorf("expected ClientID=%s to be kept", id)
+		}
+	}
+	for _, id := range []string{"2", "3"} {
+		if kept[id] {
+			t.Errorf("expected ClientID=%s to be dropped (same ldap/oidc group)", id)
+		}
+	}
+}
+
 func TestDeduplicateByAlias_ScopedToMountType(t *testing.T) {
 	// alice on LDAP and alice@corp.com on JWT share a normalized alias but have
 	// different mount types → --dedup-alias does NOT collapse them. Use

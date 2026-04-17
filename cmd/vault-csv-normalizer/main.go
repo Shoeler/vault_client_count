@@ -253,12 +253,12 @@ CSV FORMAT (Vault activity export):
   Optional column:
     entity_alias_name  (also accepted as: alias_name, entity_alias)
       When present, --dedup-alias collapses records that share the same
-      normalized alias AND mount type across all input files. Normalization
-      strips the domain suffix (at '@') and any trailing tier suffix
-      (-t0, -t1, -t2). "sbishop" in jan.csv and "sbishop-t0" in feb.csv (both
-      LDAP) → one client. A JWT record for "sbishop@corp.com" is left
-      untouched because it has a different mount type; use --dedup-jwt to
-      additionally collapse JWT against LDAP/OIDC records.
+      normalized alias within the same identity group across all input files.
+      LDAP and OIDC are treated as one group. Normalization strips the domain
+      suffix (at '@') and any trailing tier suffix (-t0, -t1, -t2).
+      "sbishop" (LDAP, jan.csv), "sbishop-t0" (LDAP, feb.csv), and
+      "sbishop@corp.com" (OIDC) → one client. JWT is a separate group;
+      use --dedup-jwt to additionally collapse JWT against LDAP/OIDC.
 
       --dedup-jwt uses the same normalization to match JWT records against
       non-JWT records in the same file. A JWT record is dropped if a non-JWT

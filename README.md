@@ -68,15 +68,16 @@ OPTIONS:
         the base name (e.g. jan.csv=2024-01-15).
   -d    Deduplicate records by client_id across all input files.
   -dedup-alias
-        Deduplicate by entity_alias_name within the same auth method across all
-        input files. Two records are considered the same client if they share
-        the same normalized alias AND the same mount type, regardless of mount
-        accessor or source file. Normalization strips the domain suffix (at '@')
-        and any trailing tier suffix (-t0, -t1, -t2), so "sbishop",
-        "sbishop-t0" in one file, and "sbishop-t1" in another are treated as
-        one LDAP client — but a JWT record for "sbishop@corp.com" is left
-        untouched (different mount type). Use --dedup-jwt to additionally
-        collapse across auth methods.
+        Deduplicate by entity_alias_name within the same identity group across
+        all input files. LDAP and OIDC are treated as one group (the same
+        person typically has the same username in both). Two records are
+        considered the same client if they share the same normalized alias AND
+        belong to the same identity group, regardless of mount accessor or
+        source file. Normalization strips the domain suffix (at '@') and any
+        trailing tier suffix (-t0, -t1, -t2), so "sbishop" (LDAP), "sbishop-t0"
+        (LDAP, another file), and "sbishop@corp.com" (OIDC) → one client.
+        JWT is a separate group and is not collapsed here; use --dedup-jwt for
+        JWT vs LDAP/OIDC dedup.
         Duplicate groups are printed as a table before the summary.
         Records without an alias are always kept. May be combined with -d.
   -dedup-jwt

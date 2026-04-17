@@ -210,9 +210,21 @@ type aliasKey struct {
 	mountType string
 }
 
+// dedupMountGroup maps mount types that represent the same identity provider
+// to a single canonical value. OIDC and LDAP are treated as one group because
+// the same person typically has the same username in both systems.
+func dedupMountGroup(mt string) string {
+	if mt == "oidc" {
+		return "ldap"
+	}
+	return mt
+}
+
 // aliasKeyFor computes the dedup key for a record. It strips the domain suffix
 // (at '@') and any trailing tier suffix ("-t0"/"-t1"/"-t2"), and scopes the
-// key to the mount type so that only records of the same auth method collapse.
+// key to the mount group so that only records of the same identity type
+// collapse. OIDC and LDAP share a group; JWT remains separate (use
+// --dedup-jwt for JWT vs LDAP/OIDC dedup).
 func aliasKeyFor(r Record) aliasKey {
 	mt := r.MountType
 	if mt == "" {
@@ -220,7 +232,7 @@ func aliasKeyFor(r Record) aliasKey {
 	}
 	return aliasKey{
 		base:      StripTierSuffix(BaseAlias(r.EntityAliasName)),
-		mountType: mt,
+		mountType: dedupMountGroup(mt),
 	}
 }
 
