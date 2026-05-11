@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -123,8 +124,30 @@ func main() {
 		}
 		normalized = normalizer.DeduplicateByAlias(normalized)
 	}
+
+	// Collect -d dedup statistics before running so debug mode can report
+	// exactly which client_ids were (or weren't) collapsed.
+	var clientIDDupsBefore int
+	var clientIDDupsAfter int
+	var clientIDDupMap map[string]int // client_id → count of input records
+	if dedup && debugMode {
+		clientIDDupsBefore = len(normalized)
+		idCount := make(map[string]int, len(normalized))
+		for _, r := range normalized {
+			idCount[r.ClientID]++
+		}
+		clientIDDupMap = make(map[string]int)
+		for id, n := range idCount {
+			if n > 1 {
+				clientIDDupMap[id] = n
+			}
+		}
+	}
 	if dedup {
 		normalized = normalizer.Deduplicate(normalized)
+		if debugMode {
+			clientIDDupsAfter = len(normalized)
+		}
 	}
 	if dedupJWT {
 		normalized = normalizer.DeduplicateJWT(normalized)
@@ -153,6 +176,28 @@ func main() {
 	}
 
 	if debugMode {
+		// Show -d dedup results so the user can see which client_ids were (or
+		// weren't) collapsed, and understand why records still appear after dedup.
+		if dedup {
+			collapsed := clientIDDupsBefore - clientIDDupsAfter
+			fmt.Fprintf(os.Stdout, "Debug: -d client_id dedup — before: %d  after: %d  collapsed: %d\n",
+				clientIDDupsBefore, clientIDDupsAfter, collapsed)
+			fmt.Fprintln(os.Stdout, strings.Repeat("-", 70))
+			if len(clientIDDupMap) > 0 {
+				dupIDs := make([]string, 0, len(clientIDDupMap))
+				for id := range clientIDDupMap {
+					dupIDs = append(dupIDs, id)
+				}
+				sort.Strings(dupIDs)
+				for _, id := range dupIDs {
+					fmt.Fprintf(os.Stdout, "  %s  (x%d → kept 1)\n", id, clientIDDupMap[id])
+				}
+			} else {
+				fmt.Fprintln(os.Stdout, "  (no duplicate client_ids found)")
+			}
+			fmt.Fprintln(os.Stdout)
+		}
+
 		// Show alias groups from the original (pre-dedup) data so the user can
 		// see aliasing context regardless of which dedup flags are active.
 		// Skip when -dedup-alias is set because it already printed these above.
@@ -190,6 +235,34 @@ func main() {
 			group := byMount[mp]
 			fmt.Fprintf(os.Stdout, "\nMount: %s (%d record(s))\n", mp, len(group))
 			renderer.PrintTable(os.Stdout, group)
+			// Flag records within this mount that share an entity alias but have
+			// different client_ids — these are candidates for -dedup-alias.
+			if len(group) > 1 {
+				aliasToIDs := make(map[string][]string)
+				for _, r := range group {
+					if r.EntityAliasName == "" {
+						continue
+					}
+					norm := normalizer.StripTierSuffix(normalizer.BaseAlias(r.EntityAliasName))
+					aliasToIDs[norm] = append(aliasToIDs[norm], r.ClientID)
+				}
+				for alias, ids := range aliasToIDs {
+					if len(ids) < 2 {
+						continue
+					}
+					// Check that not all client_ids are the same (already handled by -d).
+					allSame := true
+					for _, id := range ids[1:] {
+						if id != ids[0] {
+							allSame = false
+							break
+						}
+					}
+					if !allSame {
+						fmt.Fprintf(os.Stdout, "  !! alias %q has %d records with different client_ids — use -dedup-alias to collapse\n", alias, len(ids))
+					}
+				}
+			}
 		}
 		fmt.Fprintln(os.Stdout)
 	}
