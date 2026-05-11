@@ -105,8 +105,11 @@ func main() {
 		}
 		normalized = normalizer.FilterSincePerSource(normalized, sinceByKey)
 	}
+	// Snapshot pre-dedup records so debug mode can show alias groups from the
+	// original data regardless of which dedup flags are active.
+	preDedup := normalized
 	if dedupAlias {
-		groups := normalizer.FindAliasDuplicates(normalized)
+		groups := normalizer.FindAliasDuplicates(preDedup)
 		if len(groups) > 0 {
 			fmt.Fprintf(os.Stdout, "Alias duplicates found (%d group(s))\n", len(groups))
 			fmt.Fprintln(os.Stdout, "=====================================")
@@ -150,7 +153,25 @@ func main() {
 	}
 
 	if debugMode {
-		// Group records by mount path, preserving summary sort order.
+		// Show alias groups from the original (pre-dedup) data so the user can
+		// see aliasing context regardless of which dedup flags are active.
+		// Skip when -dedup-alias is set because it already printed these above.
+		if !dedupAlias {
+			groups := normalizer.FindAliasDuplicates(preDedup)
+			if len(groups) > 0 {
+				fmt.Fprintf(os.Stdout, "Debug: alias groups in input data (%d group(s))\n", len(groups))
+				fmt.Fprintln(os.Stdout, "===============================================")
+				for _, group := range groups {
+					r0 := group[0]
+					fmt.Fprintf(os.Stdout, "\nAlias group: %q  file: %s\n",
+						normalizer.StripTierSuffix(normalizer.BaseAlias(r0.EntityAliasName)), filepath.Base(r0.Source))
+					renderer.PrintTable(os.Stdout, group)
+				}
+				fmt.Fprintln(os.Stdout)
+			}
+		}
+
+		// Group final (post-dedup) records by mount path.
 		var mountOrder []string
 		byMount := make(map[string][]normalizer.Record)
 		for _, r := range normalized {
