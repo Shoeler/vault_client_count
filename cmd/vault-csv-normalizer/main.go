@@ -39,6 +39,7 @@ func (f fileDateFlag) Set(v string) error {
 
 func main() {
 	var inputFiles multiFlag
+	var dedupMethods multiFlag
 	var sortBy string
 	var filterNS string
 	var filterType string
@@ -48,6 +49,7 @@ func main() {
 	var dedup bool
 	var dedupAlias bool
 	var dedupJWT bool
+	var listMethods bool
 	var debugMode bool
 	var perFile bool
 	var showHelp bool
@@ -61,7 +63,9 @@ func main() {
 	flag.BoolVar(&countPKI, "p", false, "Partition and report PKI/cert clients (client_type=acme or mount_accessor prefix auth_cert) separately")
 	flag.BoolVar(&dedup, "d", false, "Deduplicate records by client_id across all input files")
 	flag.BoolVar(&dedupAlias, "dedup-alias", false, "Deduplicate by entity_alias_name (strips domain and -t0/-t1/-t2 tier suffixes; records without an alias are always kept; may be combined with -d)")
+	flag.Var(&dedupMethods, "dedup-methods", "Deduplicate by alias for the specified comma-separated auth methods, treating them as one identity group. Repeatable to define multiple groups (e.g. -dedup-methods ldap,oidc -dedup-methods jwt,saml).")
 	flag.BoolVar(&dedupJWT, "dedup-jwt", false, "Drop JWT records whose normalized alias matches a non-JWT record in the same file (prevents counting the same person via both LDAP/OIDC and JWT)")
+	flag.BoolVar(&listMethods, "list-methods", false, "Print every distinct auth method found in the input files (with record counts and alias coverage), then exit. Useful for deciding --dedup-methods groups.")
 	flag.BoolVar(&debugMode, "debug", false, "Print all records grouped by mount path")
 	flag.BoolVar(&perFile, "per-file", false, "Print a summary for each input file before the combined summary")
 	flag.BoolVar(&showHelp, "help", false, "Show usage information")
@@ -106,6 +110,27 @@ func main() {
 		}
 		normalized = normalizer.FilterSincePerSource(normalized, sinceByKey)
 	}
+	if listMethods {
+		printMethodList(normalized, inputFiles)
+		os.Exit(0)
+	}
+
+	// Parse --dedup-methods values into groups. Each flag value is a
+	// comma-separated list of mount types that form one identity group.
+	var methodGroups [][]string
+	for _, val := range dedupMethods {
+		var group []string
+		for _, m := range strings.Split(val, ",") {
+			m = strings.TrimSpace(strings.ToLower(m))
+			if m != "" {
+				group = append(group, m)
+			}
+		}
+		if len(group) > 0 {
+			methodGroups = append(methodGroups, group)
+		}
+	}
+
 	// Snapshot pre-dedup records so debug mode can show alias groups from the
 	// original data regardless of which dedup flags are active.
 	preDedup := normalized
@@ -123,6 +148,21 @@ func main() {
 			fmt.Fprintln(os.Stdout)
 		}
 		normalized = normalizer.DeduplicateByAlias(normalized)
+	}
+	if len(methodGroups) > 0 {
+		groups := normalizer.FindAliasDuplicatesForMethods(preDedup, methodGroups)
+		if len(groups) > 0 {
+			fmt.Fprintf(os.Stdout, "Method-scoped alias duplicates found (%d group(s))\n", len(groups))
+			fmt.Fprintln(os.Stdout, "================================================")
+			for _, group := range groups {
+				r0 := group[0]
+				fmt.Fprintf(os.Stdout, "\nAlias group: %q  file: %s\n",
+					normalizer.StripTierSuffix(normalizer.BaseAlias(r0.EntityAliasName)), filepath.Base(r0.Source))
+				renderer.PrintTable(os.Stdout, group)
+			}
+			fmt.Fprintln(os.Stdout)
+		}
+		normalized = normalizer.DeduplicateByAliasForMethods(normalized, methodGroups)
 	}
 
 	// Collect -d dedup statistics before running so debug mode can report
@@ -294,6 +334,48 @@ func main() {
 	}
 }
 
+func printMethodList(records []normalizer.Record, files []string) {
+	type methodStats struct {
+		total     int
+		withAlias int
+	}
+	stats := make(map[string]*methodStats)
+	order := []string{}
+
+	for _, r := range records {
+		mt := r.MountType
+		if mt == "" {
+			mt = r.AuthMethod
+		}
+		if mt == "" {
+			mt = "(blank)"
+		}
+		s, ok := stats[mt]
+		if !ok {
+			s = &methodStats{}
+			stats[mt] = s
+			order = append(order, mt)
+		}
+		s.total++
+		if r.EntityAliasName != "" {
+			s.withAlias++
+		}
+	}
+	sort.Strings(order)
+
+	fmt.Fprintf(os.Stdout, "Auth methods in input data (%d file(s), %d record(s))\n", len(files), len(records))
+	fmt.Fprintln(os.Stdout, strings.Repeat("=", 55))
+	fmt.Fprintf(os.Stdout, "  %-20s  %8s  %10s\n", "Method", "Records", "With Alias")
+	fmt.Fprintf(os.Stdout, "  %-20s  %8s  %10s\n", strings.Repeat("-", 20), strings.Repeat("-", 8), strings.Repeat("-", 10))
+	for _, mt := range order {
+		s := stats[mt]
+		fmt.Fprintf(os.Stdout, "  %-20s  %8d  %10d\n", mt, s.total, s.withAlias)
+	}
+	fmt.Fprintln(os.Stdout)
+	fmt.Fprintln(os.Stdout, "Tip: use --dedup-methods to group methods into human/machine identity sets.")
+	fmt.Fprintln(os.Stdout, "  Example: --dedup-methods ldap,oidc,jwt --dedup-methods approle,kubernetes")
+}
+
 func printUsage() {
 	fmt.Println(`vault-csv-normalizer — normalize and display Vault client export CSVs
 
@@ -358,5 +440,31 @@ CSV FORMAT (Vault activity export):
       non-JWT records in the same file. A JWT record is dropped if a non-JWT
       record (e.g. LDAP or OIDC) shares the same normalized alias, preventing
       the same person from being counted twice when they authenticate via both
-      methods. Can be combined with --dedup-alias and/or -d.`)
+      methods. Can be combined with --dedup-alias and/or -d.
+
+  --dedup-methods <method1,method2,...>
+      Apply alias deduplication (same normalization as --dedup-alias) but only
+      for records whose auth method appears in the specified comma-separated
+      group. Methods in the same group are treated as one identity — a person
+      authenticating via any of them is counted once. Records whose auth method
+      is not in any group pass through unchanged.
+
+      The flag is repeatable; each use defines one independent group:
+
+        --dedup-methods ldap,oidc
+            Deduplicate LDAP and OIDC as one identity group. "alice" (LDAP),
+            "alice@corp.com" (OIDC), and "alice-t0" (LDAP) all normalize to
+            "alice" and are counted once.
+
+        --dedup-methods ldap,oidc,jwt
+            Treat LDAP, OIDC, and JWT together as one group.
+
+        --dedup-methods ldap,oidc --dedup-methods jwt,saml
+            Two independent groups: {ldap,oidc} and {jwt,saml}. A person
+            appearing in both LDAP and OIDC is counted once; a person
+            appearing in both JWT and SAML is counted once; but an LDAP
+            record and a JWT record for the same person are not collapsed
+            (unless both groups are merged into one).
+
+      Can be combined with --dedup-alias, --dedup-jwt, and/or -d.`)
 }

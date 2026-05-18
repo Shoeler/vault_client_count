@@ -18,7 +18,7 @@ versions), and displays a summary of client counts by mount path and type.
 - Normalizes **namespace paths** (empty/`root` → `[root]`, ensures trailing `/`)
 - Normalizes **mount paths** (ensures trailing `/`)
 - Normalizes **timestamps** to UTC across all common Vault timestamp formats
-- **Deduplicates** clients across files by `client_id` when `-d` is set, or by normalized `entity_alias_name` (`--dedup-alias`), which strips domain suffixes (`@corp.com`) and tier suffixes (`-t0`/`-t1`/`-t2`)
+- **Deduplicates** clients across files by `client_id` when `-d` is set, by normalized `entity_alias_name` (`--dedup-alias`), or by alias within explicit auth-method groups (`--dedup-methods ldap,oidc`); alias normalization strips domain suffixes (`@corp.com`) and tier suffixes (`-t0`/`-t1`/`-t2`)
 - **Filters** by namespace (substring) or client type
 - **Sorts** by any column
 - Prints a **summary** with counts broken down by mount path and client type
@@ -80,13 +80,37 @@ OPTIONS:
         JWT vs LDAP/OIDC dedup.
         Duplicate groups are printed as a table before the summary.
         Records without an alias are always kept. May be combined with -d.
+  -dedup-methods method1,method2,...
+        Apply alias deduplication (same normalization as --dedup-alias) but
+        only for records whose auth method appears in the specified
+        comma-separated group. Methods in the same group are treated as one
+        identity — a person authenticating via any of them is counted once.
+        Records whose auth method is not in any group pass through unchanged.
+
+        The flag is repeatable; each use defines one independent group:
+
+          -dedup-methods ldap,oidc
+              Deduplicate LDAP and OIDC as one identity group. "alice" (LDAP),
+              "alice@corp.com" (OIDC), and "alice-t0" (LDAP) all normalize to
+              "alice" and are counted once. JWT records are unaffected.
+
+          -dedup-methods ldap,oidc,jwt
+              Treat LDAP, OIDC, and JWT together as one group.
+
+          -dedup-methods ldap,oidc -dedup-methods jwt,saml
+              Two independent groups: {ldap,oidc} and {jwt,saml}. Records in
+              different groups are never collapsed against each other.
+
+        Duplicate groups are printed as a table before the summary (same
+        format as --dedup-alias). Records without an alias and PKI clients are
+        always kept. May be combined with --dedup-alias, --dedup-jwt, and/or -d.
   -dedup-jwt
         Drop JWT records whose normalized alias matches a non-JWT record across
         any input file. Uses the same normalization as --dedup-alias (strips
         '@domain' and '-t0'/'-t1'/'-t2'). Prevents the same person from being
         counted twice when they authenticate via both LDAP/OIDC and JWT.
         Records without an alias are always kept. May be combined with
-        --dedup-alias and/or -d.
+        --dedup-alias, --dedup-methods, and/or -d.
   -per-file
         Print a summary for each input file before the combined summary
   -debug
@@ -154,6 +178,19 @@ vault-csv-normalizer -f export.csv --dedup-jwt
 # Full dedup: collapse tiers, dedup client_ids, then drop redundant JWT records
 vault-csv-normalizer -f jan.csv feb.csv --dedup-alias -d --dedup-jwt
 
+# Deduplicate LDAP and OIDC as one identity group — same person via either
+# method is counted once; other auth methods are unaffected
+vault-csv-normalizer -f export.csv --dedup-methods ldap,oidc
+
+# Treat LDAP, OIDC, and JWT together as one human-identity group
+vault-csv-normalizer -f export.csv --dedup-methods ldap,oidc,jwt
+
+# Two independent groups: {ldap,oidc} and {jwt,saml}
+vault-csv-normalizer -f export.csv -dedup-methods ldap,oidc --dedup-methods jwt,saml
+
+# Method-scoped dedup combined with client_id dedup
+vault-csv-normalizer -f jan.csv feb.csv --dedup-methods ldap,oidc -d
+
 # Exclude records created before 2024-06-01
 vault-csv-normalizer -f export.csv --since 2024-06-01
 
@@ -201,6 +238,63 @@ PKI Client Summary
   ...
 ```
 
+## Alias-based deduplication
+
+Vault can record the same human as multiple clients when they authenticate via
+different auth methods (e.g. LDAP in one session and OIDC in another) or as
+tiered accounts (`alice`, `alice-t0`, `alice-t1`). The alias-based dedup flags
+collapse these into a single count.
+
+### Alias normalization
+
+All alias-based dedup paths apply the same two-step normalization before
+comparing:
+
+1. **Strip domain suffix** — everything from `@` onward is removed.
+   `alice@corp.com` → `alice`
+2. **Strip tier suffix** — trailing `-t0`, `-t1`, or `-t2` is removed.
+   `alice-t0` → `alice`
+
+So `alice`, `alice-t0`, `alice-t1`, `alice@corp.com`, and `alice-t0@corp.com`
+all normalize to `alice` and are treated as the same person.
+
+### Choosing a dedup flag
+
+| Flag | What it collapses | What it leaves separate |
+|---|---|---|
+| `--dedup-alias` | All auth methods, grouped so LDAP=OIDC; each other type is its own group | JWT vs LDAP/OIDC |
+| `--dedup-methods ldap,oidc` | Only LDAP and OIDC, as one explicit group | Everything else untouched |
+| `--dedup-methods ldap,oidc,jwt` | LDAP, OIDC, and JWT as one group | Everything else untouched |
+| `--dedup-jwt` | JWT records that match an existing LDAP/OIDC alias | Non-JWT records |
+
+These flags are independent and can be combined. A common production workflow:
+
+```bash
+# Count human users once, across LDAP and OIDC, then remove JWT duplicates,
+# then collapse the same client_id appearing across multiple monthly exports
+vault-csv-normalizer -f jan.csv feb.csv mar.csv \
+  --dedup-methods ldap,oidc \
+  --dedup-jwt \
+  -d
+```
+
+### Auth methods reference
+
+| `mount_type` / `auth_method` | Typical users | Notes |
+|---|---|---|
+| `ldap` | Humans | Aliases usually bare usernames (`alice`) or tiered (`alice-t0`) |
+| `oidc` | Humans | Aliases usually `username@domain.com` — normalize to same base as LDAP |
+| `jwt` | Humans or services | May share aliases with LDAP/OIDC; use `--dedup-jwt` or `--dedup-methods` |
+| `approle` | Service accounts | Not human; not typically alias-deduped |
+| `kubernetes` | Service accounts | Not human; not typically alias-deduped |
+| `aws` / `gcp` | Service accounts | Not human; not typically alias-deduped |
+| `cert` | Services or devices | PKI clients; excluded from all alias dedup |
+| `acme` | Devices (ACME protocol) | PKI clients (`client_type=acme`); excluded from all alias dedup |
+
+PKI clients (cert auth with `mount_accessor` prefix `auth_cert`, or
+`client_type=acme`) are **always excluded** from alias dedup and always kept.
+Use `-p` to count them separately.
+
 ## CSV Format
 
 The tool expects CSVs exported from the Vault activity export API
@@ -221,7 +315,7 @@ The tool expects CSVs exported from the Vault activity export API
 | `client_type`            | No       | Type of client (entity, non-entity, acme, etc.)  |
 | `token_creation_time`    | No       | RFC3339 timestamp of token creation              |
 | `client_first_usage_time`| No       | RFC3339 timestamp of first authenticated call    |
-| `entity_alias_name`      | No       | Human-readable alias for the entity (used by `--dedup-alias`; domain and tier suffixes are stripped during normalization) |
+| `entity_alias_name`      | No       | Human-readable alias for the entity (used by `--dedup-alias` and `--dedup-methods`; domain and tier suffixes are stripped during normalization) |
 
 ### Supported Column Aliases
 
