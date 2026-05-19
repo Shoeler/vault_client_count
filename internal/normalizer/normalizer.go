@@ -292,6 +292,114 @@ func DeduplicateByAlias(records []Record) []Record {
 	return out
 }
 
+// buildMethodGroupMap converts a list of groups (each a slice of mount-type
+// strings) into a map from every member to the group's canonical value (the
+// first element of the group). Methods not present in any group are absent
+// from the map, which signals "not participating in method-scoped dedup".
+func buildMethodGroupMap(groups [][]string) map[string]string {
+	m := make(map[string]string)
+	for _, g := range groups {
+		if len(g) == 0 {
+			continue
+		}
+		canonical := g[0]
+		for _, method := range g {
+			m[method] = canonical
+		}
+	}
+	return m
+}
+
+// aliasKeyForMethods computes the dedup key for a record using a caller-supplied
+// group map (from buildMethodGroupMap). If the record's mount type is not in the
+// map the second return value is false, meaning the record should not participate
+// in method-scoped dedup.
+func aliasKeyForMethods(r Record, groupMap map[string]string) (aliasKey, bool) {
+	mt := r.MountType
+	if mt == "" {
+		mt = r.AuthMethod
+	}
+	canonical, ok := groupMap[mt]
+	if !ok {
+		return aliasKey{}, false
+	}
+	return aliasKey{
+		base:      StripTierSuffix(BaseAlias(r.EntityAliasName)),
+		mountType: canonical,
+	}, true
+}
+
+// FindAliasDuplicatesForMethods is the same as FindAliasDuplicates but only
+// considers records whose auth method (MountType or AuthMethod) appears in one
+// of the provided groups. Each group is a slice of mount-type strings that
+// should be treated as the same identity (e.g. ["ldap","oidc"]). Records whose
+// method is not in any group are not reported. Groups are independent: records
+// in different groups are never compared against each other.
+func FindAliasDuplicatesForMethods(records []Record, groups [][]string) [][]Record {
+	groupMap := buildMethodGroupMap(groups)
+
+	type entry struct {
+		key     aliasKey
+		members []Record
+	}
+	index := make(map[aliasKey]int)
+	var entries []entry
+
+	for _, r := range records {
+		if r.EntityAliasName == "" || IsPKIClient(r) {
+			continue
+		}
+		k, ok := aliasKeyForMethods(r, groupMap)
+		if !ok {
+			continue
+		}
+		if idx, exists := index[k]; exists {
+			entries[idx].members = append(entries[idx].members, r)
+		} else {
+			index[k] = len(entries)
+			entries = append(entries, entry{key: k, members: []Record{r}})
+		}
+	}
+
+	var out [][]Record
+	for _, e := range entries {
+		if len(e.members) > 1 {
+			out = append(out, e.members)
+		}
+	}
+	return out
+}
+
+// DeduplicateByAliasForMethods applies the same alias dedup logic as
+// DeduplicateByAlias but only for records whose auth method appears in one of
+// the provided groups. Each group is a slice of mount-type strings treated as
+// one identity (e.g. ["ldap","oidc"]). Records whose method is not in any group
+// pass through unchanged. Records with a blank EntityAliasName or that are PKI
+// clients are always kept.
+func DeduplicateByAliasForMethods(records []Record, groups [][]string) []Record {
+	groupMap := buildMethodGroupMap(groups)
+	seen := make(map[aliasKey]struct{}, len(records))
+	out := make([]Record, 0, len(records))
+	for _, r := range records {
+		if r.EntityAliasName == "" || IsPKIClient(r) {
+			out = append(out, r)
+			continue
+		}
+		k, ok := aliasKeyForMethods(r, groupMap)
+		if !ok {
+			// Method not in any group — pass through untouched.
+			out = append(out, r)
+			continue
+		}
+		if _, dup := seen[k]; dup {
+			continue
+		}
+		seen[k] = struct{}{}
+		out = append(out, r)
+	}
+	return out
+}
+
 // isJWT reports whether r was authenticated via JWT.
 func isJWT(r Record) bool {
 	return r.MountType == "jwt" || r.AuthMethod == "jwt"

@@ -891,6 +891,196 @@ func TestDeduplicateByAlias_TieredAccountsAcrossFiles(t *testing.T) {
 	}
 }
 
+// ── method-scoped alias deduplication ────────────────────────────────────────
+
+func TestDeduplicateByAliasForMethods_LDAPAndOIDCGroup(t *testing.T) {
+	// Same as -dedup-alias LDAP/OIDC behavior, but specified explicitly.
+	// alice via LDAP is kept; alice@corp.com via OIDC is dropped (same group).
+	// alice via JWT is kept (not in the group).
+	records := []Record{
+		{ClientID: "1", EntityAliasName: "alice", MountType: "ldap", Source: "jan.csv"},
+		{ClientID: "2", EntityAliasName: "alice@corp.com", MountType: "oidc", Source: "jan.csv"}, // dropped
+		{ClientID: "3", EntityAliasName: "alice-t0", MountType: "ldap", Source: "feb.csv"},       // dropped: tier stripped
+		{ClientID: "4", EntityAliasName: "alice@corp.com", MountType: "jwt", Source: "jan.csv"},  // kept: jwt not in group
+		{ClientID: "5", EntityAliasName: "bob", MountType: "ldap", Source: "jan.csv"},            // kept: different alias
+	}
+	groups := [][]string{{"ldap", "oidc"}}
+	out := DeduplicateByAliasForMethods(records, groups)
+	if len(out) != 3 {
+		t.Fatalf("expected 3 records, got %d: %v", len(out), clientIDs(out))
+	}
+	kept := clientIDSet(out)
+	for _, id := range []string{"1", "4", "5"} {
+		if !kept[id] {
+			t.Errorf("expected ClientID=%s to be kept", id)
+		}
+	}
+	for _, id := range []string{"2", "3"} {
+		if kept[id] {
+			t.Errorf("expected ClientID=%s to be dropped", id)
+		}
+	}
+}
+
+func TestDeduplicateByAliasForMethods_MethodsNotInGroupPassThrough(t *testing.T) {
+	// approle records are not in any group and must pass through untouched,
+	// even if two share the same alias.
+	records := []Record{
+		{ClientID: "1", EntityAliasName: "svc-account", MountType: "approle", Source: "jan.csv"},
+		{ClientID: "2", EntityAliasName: "svc-account", MountType: "approle", Source: "jan.csv"}, // NOT deduped
+		{ClientID: "3", EntityAliasName: "alice", MountType: "ldap", Source: "jan.csv"},
+		{ClientID: "4", EntityAliasName: "alice@corp.com", MountType: "oidc", Source: "jan.csv"}, // dropped
+	}
+	groups := [][]string{{"ldap", "oidc"}}
+	out := DeduplicateByAliasForMethods(records, groups)
+	if len(out) != 3 {
+		t.Fatalf("expected 3 records (2 approle + 1 ldap), got %d: %v", len(out), clientIDs(out))
+	}
+	kept := clientIDSet(out)
+	for _, id := range []string{"1", "2", "3"} {
+		if !kept[id] {
+			t.Errorf("expected ClientID=%s to be kept", id)
+		}
+	}
+	if kept["4"] {
+		t.Error("expected ClientID=4 (oidc dup) to be dropped")
+	}
+}
+
+func TestDeduplicateByAliasForMethods_MultipleIndependentGroups(t *testing.T) {
+	// Group 1: {ldap, oidc}; Group 2: {jwt, saml}
+	// alice/ldap and alice/oidc collapse → 1 kept
+	// alice/jwt and alice/saml collapse → 1 kept
+	// The two groups don't interact with each other.
+	records := []Record{
+		{ClientID: "1", EntityAliasName: "alice", MountType: "ldap", Source: "jan.csv"},
+		{ClientID: "2", EntityAliasName: "alice@corp.com", MountType: "oidc", Source: "jan.csv"}, // dropped (group 1)
+		{ClientID: "3", EntityAliasName: "alice@corp.com", MountType: "jwt", Source: "jan.csv"},  // kept (group 2 first)
+		{ClientID: "4", EntityAliasName: "alice", MountType: "saml", Source: "jan.csv"},          // dropped (group 2)
+		{ClientID: "5", EntityAliasName: "bob", MountType: "ldap", Source: "jan.csv"},            // kept: different alias
+	}
+	groups := [][]string{{"ldap", "oidc"}, {"jwt", "saml"}}
+	out := DeduplicateByAliasForMethods(records, groups)
+	if len(out) != 3 {
+		t.Fatalf("expected 3 records, got %d: %v", len(out), clientIDs(out))
+	}
+	kept := clientIDSet(out)
+	for _, id := range []string{"1", "3", "5"} {
+		if !kept[id] {
+			t.Errorf("expected ClientID=%s to be kept", id)
+		}
+	}
+	for _, id := range []string{"2", "4"} {
+		if kept[id] {
+			t.Errorf("expected ClientID=%s to be dropped", id)
+		}
+	}
+}
+
+func TestDeduplicateByAliasForMethods_ThreeMethodsOneGroup(t *testing.T) {
+	// ldap, oidc, jwt all in one group — alice across all three collapses to 1.
+	records := []Record{
+		{ClientID: "1", EntityAliasName: "alice", MountType: "ldap", Source: "jan.csv"},
+		{ClientID: "2", EntityAliasName: "alice@corp.com", MountType: "oidc", Source: "jan.csv"}, // dropped
+		{ClientID: "3", EntityAliasName: "alice@corp.com", MountType: "jwt", Source: "jan.csv"},  // dropped
+		{ClientID: "4", EntityAliasName: "bob", MountType: "jwt", Source: "jan.csv"},             // kept: different alias
+	}
+	groups := [][]string{{"ldap", "oidc", "jwt"}}
+	out := DeduplicateByAliasForMethods(records, groups)
+	if len(out) != 2 {
+		t.Fatalf("expected 2 records, got %d: %v", len(out), clientIDs(out))
+	}
+	kept := clientIDSet(out)
+	if !kept["1"] {
+		t.Error("expected id:1 (alice ldap, first occurrence) to be kept")
+	}
+	if !kept["4"] {
+		t.Error("expected id:4 (bob) to be kept")
+	}
+}
+
+func TestDeduplicateByAliasForMethods_BlankAliasAlwaysKept(t *testing.T) {
+	records := []Record{
+		{ClientID: "1", EntityAliasName: "", MountType: "ldap", Source: "jan.csv"},
+		{ClientID: "2", EntityAliasName: "", MountType: "oidc", Source: "jan.csv"},
+		{ClientID: "3", EntityAliasName: "alice", MountType: "ldap", Source: "jan.csv"},
+	}
+	groups := [][]string{{"ldap", "oidc"}}
+	out := DeduplicateByAliasForMethods(records, groups)
+	if len(out) != 3 {
+		t.Fatalf("expected 3 records (2 blank + 1 aliased), got %d", len(out))
+	}
+}
+
+func TestDeduplicateByAliasForMethods_PKIClientsAlwaysKept(t *testing.T) {
+	records := []Record{
+		{ClientID: "1", EntityAliasName: "abc-123", ClientType: "acme", MountType: "ldap", Source: "jan.csv"},
+		{ClientID: "2", EntityAliasName: "abc-123", ClientType: "acme", MountType: "oidc", Source: "jan.csv"},
+		{ClientID: "3", EntityAliasName: "alice", MountType: "ldap", Source: "jan.csv"},
+		{ClientID: "4", EntityAliasName: "alice@corp.com", MountType: "oidc", Source: "jan.csv"}, // dropped
+	}
+	groups := [][]string{{"ldap", "oidc"}}
+	out := DeduplicateByAliasForMethods(records, groups)
+	if len(out) != 3 {
+		t.Fatalf("expected 3 records (2 PKI + 1 non-PKI), got %d: %v", len(out), clientIDs(out))
+	}
+	kept := clientIDSet(out)
+	for _, id := range []string{"1", "2", "3"} {
+		if !kept[id] {
+			t.Errorf("expected ClientID=%s to be kept", id)
+		}
+	}
+	if kept["4"] {
+		t.Error("expected ClientID=4 to be dropped")
+	}
+}
+
+func TestDeduplicateByAliasForMethods_AuthMethodFallback(t *testing.T) {
+	// MountType is blank; dedup should fall back to AuthMethod.
+	records := []Record{
+		{ClientID: "1", EntityAliasName: "alice", AuthMethod: "ldap", Source: "jan.csv"},
+		{ClientID: "2", EntityAliasName: "alice@corp.com", AuthMethod: "oidc", Source: "jan.csv"}, // dropped
+	}
+	groups := [][]string{{"ldap", "oidc"}}
+	out := DeduplicateByAliasForMethods(records, groups)
+	if len(out) != 1 {
+		t.Fatalf("expected 1 record, got %d: %v", len(out), clientIDs(out))
+	}
+	if out[0].ClientID != "1" {
+		t.Errorf("expected id:1 to be kept, got %s", out[0].ClientID)
+	}
+}
+
+func TestFindAliasDuplicatesForMethods_ReportsGroupsOnly(t *testing.T) {
+	// Only ldap and oidc records should be reported as duplicates.
+	// approle records with the same alias are not in the group and not reported.
+	records := []Record{
+		{ClientID: "1", EntityAliasName: "alice", MountType: "ldap", Source: "jan.csv"},
+		{ClientID: "2", EntityAliasName: "alice@corp.com", MountType: "oidc", Source: "jan.csv"},
+		{ClientID: "3", EntityAliasName: "alice", MountType: "approle", Source: "jan.csv"}, // not in group
+	}
+	groups := [][]string{{"ldap", "oidc"}}
+	dups := FindAliasDuplicatesForMethods(records, groups)
+	if len(dups) != 1 {
+		t.Fatalf("expected 1 duplicate group, got %d", len(dups))
+	}
+	if len(dups[0]) != 2 {
+		t.Errorf("expected 2 members in group (ldap + oidc), got %d", len(dups[0]))
+	}
+}
+
+func TestFindAliasDuplicatesForMethods_NoDuplicates(t *testing.T) {
+	records := []Record{
+		{ClientID: "1", EntityAliasName: "alice", MountType: "ldap", Source: "jan.csv"},
+		{ClientID: "2", EntityAliasName: "bob", MountType: "oidc", Source: "jan.csv"},
+	}
+	groups := [][]string{{"ldap", "oidc"}}
+	dups := FindAliasDuplicatesForMethods(records, groups)
+	if len(dups) != 0 {
+		t.Errorf("expected no duplicate groups, got %d", len(dups))
+	}
+}
+
 // ── input mutation safety ─────────────────────────────────────────────────────
 // These tests guard against the records[:0] pattern, which reuses the backing
 // array and silently corrupts the caller's slice. Each filter must not modify

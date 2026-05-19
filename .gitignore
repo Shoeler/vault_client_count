@@ -3,6 +3,7 @@
 
 # Claude
 .claude/
+CLAUDE.md
 
 # Test data outputs
 testdata/out.csv
@@ -11,6 +12,8 @@ testdata/out.csv
 *.exe
 *.test
 *.out
+*.prof
+coverage.out
 /bin/
 /dist/
 
