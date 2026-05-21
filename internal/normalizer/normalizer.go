@@ -659,7 +659,7 @@ func FilterAbandonedClients(records []Record) ([]Record, AbandonedClientCounts) 
 	out := make([]Record, 0, len(records))
 	counts := AbandonedClientCounts{}
 	for _, r := range records {
-		if r.EntityName == "" && r.EntityAliasName == "" {
+		if r.EntityName == "" && r.EntityAliasName == "" && r.ClientType == "entity" {
 			if r.MountPath == "" {
 				counts.NoMount++
 				continue
