@@ -23,9 +23,10 @@ type Record struct {
 	MountType            string
 	AuthMethod           string
 	ClientType           string // normalized: entity | non-entity | acme | secret-sync | unknown
-	TokenCreationTime    time.Time
-	ClientFirstUsageTime time.Time
-	EntityAliasName      string
+	TokenCreationTime           time.Time
+	ClientFirstUsageTime        time.Time
+	EntityAliasName             string
+	EntityAliasMetadataUsername string
 }
 
 // supportedSortKeys lists columns accepted by Sort.
@@ -51,18 +52,19 @@ func Normalize(raw []parser.RawRecord) []Record {
 
 func normalizeOne(r parser.RawRecord) Record {
 	return Record{
-		Source:               r.Source,
-		ClientID:             r.ClientID,
-		NamespaceID:          normalizeNamespaceID(r.NamespaceID),
-		NamespacePath:        normalizeNamespacePath(r.NamespacePath),
-		MountAccessor:        strings.TrimSpace(r.MountAccessor),
-		MountPath:            normalizeMountPath(r.MountPath),
-		MountType:            strings.ToLower(strings.TrimSpace(r.MountType)),
-		AuthMethod:           strings.ToLower(strings.TrimSpace(r.AuthMethod)),
-		ClientType:           normalizeClientType(r.ClientType),
-		TokenCreationTime:    ParseTime(r.TokenCreationTime),
-		ClientFirstUsageTime: ParseTime(r.ClientFirstUsageTime),
-		EntityAliasName:      strings.TrimSpace(r.EntityAliasName),
+		Source:                      r.Source,
+		ClientID:                    r.ClientID,
+		NamespaceID:                 normalizeNamespaceID(r.NamespaceID),
+		NamespacePath:               normalizeNamespacePath(r.NamespacePath),
+		MountAccessor:               strings.TrimSpace(r.MountAccessor),
+		MountPath:                   normalizeMountPath(r.MountPath),
+		MountType:                   strings.ToLower(strings.TrimSpace(r.MountType)),
+		AuthMethod:                  strings.ToLower(strings.TrimSpace(r.AuthMethod)),
+		ClientType:                  normalizeClientType(r.ClientType),
+		TokenCreationTime:           ParseTime(r.TokenCreationTime),
+		ClientFirstUsageTime:        ParseTime(r.ClientFirstUsageTime),
+		EntityAliasName:             strings.TrimSpace(r.EntityAliasName),
+		EntityAliasMetadataUsername: strings.TrimSpace(r.EntityAliasMetadataUsername),
 	}
 }
 
@@ -395,6 +397,122 @@ func DeduplicateByAliasForMethods(records []Record, groups [][]string) []Record 
 			continue
 		}
 		seen[k] = struct{}{}
+		out = append(out, r)
+	}
+	return out
+}
+
+// aliasKeyInFile is the deduplication key for per-file alias dedup. It includes
+// the source file so records from different files are never collapsed together.
+type aliasKeyInFile struct {
+	base      string
+	mountType string
+	source    string
+}
+
+// isOIDC reports whether r was authenticated via OIDC.
+func isOIDC(r Record) bool {
+	return r.MountType == "oidc" || r.AuthMethod == "oidc"
+}
+
+// effectiveAliasInFile returns the alias to use for per-file dedup. For OIDC
+// records, entity_alias_metadata.username holds the human-readable username;
+// entity_alias_name may be a subject identifier (UUID or email) that doesn't
+// match other methods. All other methods use entity_alias_name directly.
+func effectiveAliasInFile(r Record) string {
+	if isOIDC(r) && r.EntityAliasMetadataUsername != "" {
+		return r.EntityAliasMetadataUsername
+	}
+	return r.EntityAliasName
+}
+
+// aliasKeyInFileFor computes the per-file dedup key for a record. It applies
+// BaseAlias (strips everything after '@' if present) but not StripTierSuffix,
+// so "alice-t0" and "alice-t1" are treated as distinct identities. The '@'
+// strip is needed for JWT, which uses full email addresses ("alice@corp.com");
+// LDAP uses bare usernames ("alice"); OIDC uses entity_alias_metadata.username.
+// Returns false if the record's mount type is not in any provided group.
+func aliasKeyInFileFor(r Record, groupMap map[string]string) (aliasKeyInFile, bool) {
+	mt := r.MountType
+	if mt == "" {
+		mt = r.AuthMethod
+	}
+	canonical, ok := groupMap[mt]
+	if !ok {
+		return aliasKeyInFile{}, false
+	}
+	return aliasKeyInFile{
+		base:      BaseAlias(effectiveAliasInFile(r)),
+		mountType: canonical,
+		source:    r.Source,
+	}, true
+}
+
+// FindAliasDuplicatesForMethodsPerFile is like FindAliasDuplicatesForMethods
+// but only collapses records within the same source file. Records in different
+// files with the same alias are not reported as duplicates. Matching uses only
+// the portion of the alias left of '@'; tier suffixes (-t0/-t1/-t2) are not
+// stripped and must match exactly.
+func FindAliasDuplicatesForMethodsPerFile(records []Record, groups [][]string) [][]Record {
+	groupMap := buildMethodGroupMap(groups)
+
+	type entry struct {
+		key     aliasKeyInFile
+		members []Record
+	}
+	index := make(map[aliasKeyInFile]int)
+	var entries []entry
+
+	for _, r := range records {
+		if effectiveAliasInFile(r) == "" || IsPKIClient(r) {
+			continue
+		}
+		kf, ok := aliasKeyInFileFor(r, groupMap)
+		if !ok {
+			continue
+		}
+		if idx, exists := index[kf]; exists {
+			entries[idx].members = append(entries[idx].members, r)
+		} else {
+			index[kf] = len(entries)
+			entries = append(entries, entry{key: kf, members: []Record{r}})
+		}
+	}
+
+	var out [][]Record
+	for _, e := range entries {
+		if len(e.members) > 1 {
+			out = append(out, e.members)
+		}
+	}
+	return out
+}
+
+// DeduplicateByAliasForMethodsPerFile applies alias dedup like
+// DeduplicateByAliasForMethods but scoped to each source file independently.
+// Records in different files are never collapsed; only records from the same
+// file with the same normalized alias and method group are deduplicated.
+// Matching uses only the portion of the alias left of '@'; tier suffixes
+// (-t0/-t1/-t2) are not stripped and must match exactly.
+// Records with a blank EntityAliasName or that are PKI clients are always kept.
+func DeduplicateByAliasForMethodsPerFile(records []Record, groups [][]string) []Record {
+	groupMap := buildMethodGroupMap(groups)
+	seen := make(map[aliasKeyInFile]struct{}, len(records))
+	out := make([]Record, 0, len(records))
+	for _, r := range records {
+		if effectiveAliasInFile(r) == "" || IsPKIClient(r) {
+			out = append(out, r)
+			continue
+		}
+		kf, ok := aliasKeyInFileFor(r, groupMap)
+		if !ok {
+			out = append(out, r)
+			continue
+		}
+		if _, dup := seen[kf]; dup {
+			continue
+		}
+		seen[kf] = struct{}{}
 		out = append(out, r)
 	}
 	return out
