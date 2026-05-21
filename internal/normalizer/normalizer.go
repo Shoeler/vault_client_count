@@ -14,15 +14,16 @@ import (
 
 // Record is a fully normalized Vault client record.
 type Record struct {
-	Source               string
-	ClientID             string
-	NamespaceID          string
-	NamespacePath        string
-	MountAccessor        string
-	MountPath            string
-	MountType            string
-	AuthMethod           string
-	ClientType           string // normalized: entity | non-entity | acme | secret-sync | unknown
+	Source                      string
+	ClientID                    string
+	EntityName                  string
+	NamespaceID                 string
+	NamespacePath               string
+	MountAccessor               string
+	MountPath                   string
+	MountType                   string
+	AuthMethod                  string
+	ClientType                  string // normalized: entity | non-entity | acme | secret-sync | unknown
 	TokenCreationTime           time.Time
 	ClientFirstUsageTime        time.Time
 	EntityAliasName             string
@@ -31,14 +32,14 @@ type Record struct {
 
 // supportedSortKeys lists columns accepted by Sort.
 var supportedSortKeys = map[string]bool{
-	"namespace_path":         true,
-	"client_type":            true,
-	"token_creation_time":    true,
+	"namespace_path":          true,
+	"client_type":             true,
+	"token_creation_time":     true,
 	"client_first_usage_time": true,
-	"mount_accessor":         true,
-	"mount_path":             true,
-	"auth_method":            true,
-	"source":                 true,
+	"mount_accessor":          true,
+	"mount_path":              true,
+	"auth_method":             true,
+	"source":                  true,
 }
 
 // Normalize converts a slice of raw records into normalized records.
@@ -54,6 +55,7 @@ func normalizeOne(r parser.RawRecord) Record {
 	return Record{
 		Source:                      r.Source,
 		ClientID:                    r.ClientID,
+		EntityName:                  strings.TrimSpace(r.EntityName),
 		NamespaceID:                 normalizeNamespaceID(r.NamespaceID),
 		NamespacePath:               normalizeNamespacePath(r.NamespacePath),
 		MountAccessor:               strings.TrimSpace(r.MountAccessor),
@@ -103,20 +105,20 @@ func normalizeMountPath(path string) string {
 
 // clientTypeAliases maps various raw strings to a canonical client type.
 var clientTypeAliases = map[string]string{
-	"entity":                     "entity",
-	"entity client":              "entity",
-	"non-entity":                 "non-entity",
-	"non_entity":                 "non-entity",
-	"non-entity client":          "non-entity",
-	"non_entity_client":          "non-entity",
-	"nonentity":                  "non-entity",
-	"acme":                       "acme",
-	"acme client":                "acme",
-	"secret-sync":                "secret-sync",
-	"secret_sync":                "secret-sync",
-	"secretsync":                 "secret-sync",
-	"secrets sync":               "secret-sync",
-	"secret sync":                "secret-sync",
+	"entity":            "entity",
+	"entity client":     "entity",
+	"non-entity":        "non-entity",
+	"non_entity":        "non-entity",
+	"non-entity client": "non-entity",
+	"non_entity_client": "non-entity",
+	"nonentity":         "non-entity",
+	"acme":              "acme",
+	"acme client":       "acme",
+	"secret-sync":       "secret-sync",
+	"secret_sync":       "secret-sync",
+	"secretsync":        "secret-sync",
+	"secrets sync":      "secret-sync",
+	"secret sync":       "secret-sync",
 }
 
 func normalizeClientType(raw string) string {
@@ -634,6 +636,40 @@ func FilterByClientType(records []Record, clientType string) []Record {
 		}
 	}
 	return out
+}
+
+// AbandonedClientCounts reports how many anonymous records were removed by
+// FilterAbandonedClients, split by whether an auth mount is present.
+type AbandonedClientCounts struct {
+	NoMount       int
+	MergedDeleted int
+}
+
+// Total returns the sum of removed abandoned-client records.
+func (c AbandonedClientCounts) Total() int {
+	return c.NoMount + c.MergedDeleted
+}
+
+// FilterAbandonedClients removes records with no entity identity (both
+// entity_name and entity_alias_name are blank) and reports separate counts for
+// two cases:
+//   - NoMount: mount_path is blank (auth mount no longer exists)
+//   - MergedDeleted: mount_path is present (entity was likely merged/deleted)
+func FilterAbandonedClients(records []Record) ([]Record, AbandonedClientCounts) {
+	out := make([]Record, 0, len(records))
+	counts := AbandonedClientCounts{}
+	for _, r := range records {
+		if r.EntityName == "" && r.EntityAliasName == "" {
+			if r.MountPath == "" {
+				counts.NoMount++
+				continue
+			}
+			counts.MergedDeleted++
+			continue
+		}
+		out = append(out, r)
+	}
+	return out, counts
 }
 
 // Sort sorts records in-place by the given column key. Returns an error if

@@ -18,6 +18,7 @@ type RawRecord struct {
 	Source string
 
 	ClientID                    string
+	EntityName                  string
 	NamespaceID                 string
 	NamespacePath               string
 	MountAccessor               string
@@ -35,6 +36,7 @@ type RawRecord struct {
 // a canonical field name used by the column mapper below.
 var knownColumns = map[string]string{
 	"client_id":              "client_id",
+	"entity_name":            "entity_name",
 	"namespace_id":           "namespace_id",
 	"namespace_path":         "namespace_path",
 	"mount_accessor":         "mount_accessor",
@@ -127,6 +129,7 @@ func parseReader(r io.Reader, source string) ([]RawRecord, error) {
 		records = append(records, RawRecord{
 			Source:                      source,
 			ClientID:                    clientID,
+			EntityName:                  get(row, "entity_name"),
 			NamespaceID:                 get(row, "namespace_id"),
 			NamespacePath:               get(row, "namespace_path"),
 			MountAccessor:               get(row, "mount_accessor"),

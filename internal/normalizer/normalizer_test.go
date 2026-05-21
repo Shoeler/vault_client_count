@@ -1,6 +1,7 @@
 package normalizer
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -73,15 +74,16 @@ func TestParseTime(t *testing.T) {
 func TestNormalize(t *testing.T) {
 	raw := []parser.RawRecord{
 		{
-			Source:             "jan.csv",
-			ClientID:           "abc-123",
-			NamespaceID:        "",
-			NamespacePath:      "root",
-			MountPath:          "auth/approle",
-			MountType:          "APPROLE",
-			AuthMethod:         "AppRole",
-			ClientType:         "non_entity",
-			TokenCreationTime:  "2024-01-01T00:00:00Z",
+			Source:            "jan.csv",
+			ClientID:          "abc-123",
+			EntityName:        "  Alice Smith  ",
+			NamespaceID:       "",
+			NamespacePath:     "root",
+			MountPath:         "auth/approle",
+			MountType:         "APPROLE",
+			AuthMethod:        "AppRole",
+			ClientType:        "non_entity",
+			TokenCreationTime: "2024-01-01T00:00:00Z",
 		},
 	}
 	records := Normalize(raw)
@@ -89,6 +91,9 @@ func TestNormalize(t *testing.T) {
 		t.Fatalf("expected 1 record, got %d", len(records))
 	}
 	r := records[0]
+	if r.EntityName != "Alice Smith" {
+		t.Errorf("EntityName: got %q, want Alice Smith", r.EntityName)
+	}
 	if r.NamespacePath != "[root]" {
 		t.Errorf("NamespacePath: got %q, want [root]", r.NamespacePath)
 	}
@@ -136,6 +141,40 @@ func TestFilterByClientType(t *testing.T) {
 	filtered := FilterByClientType(records, "entity")
 	if len(filtered) != 2 {
 		t.Errorf("expected 2 entity records, got %d", len(filtered))
+	}
+}
+
+func TestFilterAbandonedClients(t *testing.T) {
+	records := []Record{
+		// removed as merged/deleted: mount path present
+		{ClientID: "drop-merged-1", EntityName: "", EntityAliasName: "", MountPath: "auth/ldap/", MountType: "ldap"},
+		// removed as merged/deleted: mount path present even if mount type is blank
+		{ClientID: "drop-merged-2", EntityName: "", EntityAliasName: "", MountPath: "auth/oidc/", MountType: ""},
+		// removed as no mount: mount path missing
+		{ClientID: "drop-nomount-1", EntityName: "", EntityAliasName: "", MountPath: "", MountType: "ldap"},
+		// keep: entity name present
+		{ClientID: "keep-3", EntityName: "Alice", EntityAliasName: "", MountPath: "auth/ldap/", MountType: "ldap"},
+		// keep: entity alias present
+		{ClientID: "keep-4", EntityName: "", EntityAliasName: "alice", MountPath: "auth/ldap/", MountType: "ldap"},
+	}
+
+	out, counts := FilterAbandonedClients(records)
+	if counts.NoMount != 1 {
+		t.Fatalf("expected NoMount=1, got %d", counts.NoMount)
+	}
+	if counts.MergedDeleted != 2 {
+		t.Fatalf("expected MergedDeleted=2, got %d", counts.MergedDeleted)
+	}
+	if counts.Total() != 3 {
+		t.Fatalf("expected Total=3, got %d", counts.Total())
+	}
+	if len(out) != 2 {
+		t.Fatalf("expected 2 records after filter, got %d", len(out))
+	}
+	for _, r := range out {
+		if strings.HasPrefix(r.ClientID, "drop-") {
+			t.Fatal("drop-* records should have been removed")
+		}
 	}
 }
 
@@ -246,8 +285,8 @@ func TestStripTierSuffix(t *testing.T) {
 		{"alice-t10", "alice-t10"},
 		{"alice-T0", "alice-T0"}, // case-sensitive
 		{"alice", "alice"},
-		{"-t0", ""},   // degenerate: only the suffix
-		{"t0", "t0"},  // no hyphen
+		{"-t0", ""},  // degenerate: only the suffix
+		{"t0", "t0"}, // no hyphen
 		{"", ""},
 	}
 	for _, c := range cases {
@@ -285,7 +324,7 @@ func TestDeduplicateByAlias_CollapsesSameBaseAcrossAccessors(t *testing.T) {
 		{ClientID: "3", EntityAliasName: "sbishop-t0", MountAccessor: "auth_ldap_abc123", Source: "jan.csv"},           // dup: tier stripped → "sbishop"
 		{ClientID: "4", EntityAliasName: "sbishop-t1", MountAccessor: "auth_oidc_xyz789", Source: "jan.csv"},           // dup: tier stripped → "sbishop"
 		{ClientID: "5", EntityAliasName: "sbishop", MountAccessor: "auth_ldap_abc123", Source: "feb.csv"},              // dup: same normalized alias across files
-		{ClientID: "6", EntityAliasName: ""},                                                                            // kept: blank always kept
+		{ClientID: "6", EntityAliasName: ""}, // kept: blank always kept
 	}
 	out := DeduplicateByAlias(records)
 	if len(out) != 2 {
@@ -324,7 +363,7 @@ func TestFindAliasDuplicates_SameBaseAcrossAccessors(t *testing.T) {
 		{ClientID: "2", EntityAliasName: "sbishop@hashicorp.com", MountAccessor: "auth_jwt_def456", Source: "jan.csv"},
 		{ClientID: "3", EntityAliasName: "sbishop-t0", MountAccessor: "auth_ldap_abc123", Source: "jan.csv"},
 		{ClientID: "4", EntityAliasName: "sbishop", MountAccessor: "auth_ldap_abc123", Source: "feb.csv"}, // cross-file dup
-		{ClientID: "5", EntityAliasName: ""},                                                               // ignored
+		{ClientID: "5", EntityAliasName: ""}, // ignored
 	}
 	groups := FindAliasDuplicates(records)
 	if len(groups) != 1 {
@@ -358,11 +397,11 @@ func TestDeduplicateByAlias_IgnoresPKIClients(t *testing.T) {
 	// PKI clients are always kept regardless of alias duplication.
 	// Non-PKI clients with the same base alias in the same file are deduplicated.
 	records := []Record{
-		{ClientID: "1", EntityAliasName: "abc-123", ClientType: "acme", Source: "jan.csv"},  // PKI, kept
-		{ClientID: "2", EntityAliasName: "abc-456", ClientType: "acme", Source: "jan.csv"},  // PKI, kept (not deduped)
+		{ClientID: "1", EntityAliasName: "abc-123", ClientType: "acme", Source: "jan.csv"},             // PKI, kept
+		{ClientID: "2", EntityAliasName: "abc-456", ClientType: "acme", Source: "jan.csv"},             // PKI, kept (not deduped)
 		{ClientID: "3", EntityAliasName: "abc-789", MountAccessor: "auth_cert_xyz", Source: "jan.csv"}, // cert auth — PKI, kept
-		{ClientID: "4", EntityAliasName: "alice@corp", Source: "jan.csv"},                   // non-PKI, first: kept
-		{ClientID: "5", EntityAliasName: "alice@example.com", Source: "jan.csv"},            // non-PKI dup: base "alice" already seen, dropped
+		{ClientID: "4", EntityAliasName: "alice@corp", Source: "jan.csv"},                              // non-PKI, first: kept
+		{ClientID: "5", EntityAliasName: "alice@example.com", Source: "jan.csv"},                       // non-PKI dup: base "alice" already seen, dropped
 	}
 	out := DeduplicateByAlias(records)
 	if len(out) != 4 {
@@ -547,7 +586,6 @@ func TestPartitionPKI_NoPKI(t *testing.T) {
 	}
 }
 
-
 func TestPartitionPKI_Empty(t *testing.T) {
 	pki, nonPKI := PartitionPKI(nil, IsPKIClient)
 	if pki != nil || nonPKI != nil {
@@ -567,8 +605,8 @@ func TestFilterSincePerSource_FiltersTargetFileOnly(t *testing.T) {
 	records := []Record{
 		// jan.csv: one record before cutoff, one after
 		{ClientID: "j1", Source: "jan.csv", TokenCreationTime: jan15.Add(-24 * time.Hour)}, // before — excluded
-		{ClientID: "j2", Source: "jan.csv", TokenCreationTime: jan15},                       // on cutoff — kept
-		{ClientID: "j3", Source: "jan.csv", TokenCreationTime: jan20},                       // after — kept
+		{ClientID: "j2", Source: "jan.csv", TokenCreationTime: jan15},                      // on cutoff — kept
+		{ClientID: "j3", Source: "jan.csv", TokenCreationTime: jan20},                      // after — kept
 		// feb.csv: not in filter map — all kept regardless of date
 		{ClientID: "f1", Source: "feb.csv", TokenCreationTime: jan15.Add(-24 * time.Hour)}, // old but kept
 		{ClientID: "f2", Source: "feb.csv", TokenCreationTime: feb01},
@@ -813,10 +851,10 @@ func TestDeduplicateByAlias_CollapseOIDCWithLDAP(t *testing.T) {
 	// JWT remains a separate group and is not collapsed here.
 	records := []Record{
 		{ClientID: "1", EntityAliasName: "alice", MountType: "ldap", Source: "jan.csv"},
-		{ClientID: "2", EntityAliasName: "alice@corp.com", MountType: "oidc", Source: "jan.csv"},  // dup: ldap/oidc group, normalizes to "alice"
-		{ClientID: "3", EntityAliasName: "alice-t0", MountType: "ldap", Source: "feb.csv"},        // dup: ldap/oidc group, tier stripped → "alice"
-		{ClientID: "4", EntityAliasName: "alice@corp.com", MountType: "jwt", Source: "jan.csv"},   // kept: jwt is a separate group
-		{ClientID: "5", EntityAliasName: "bob", MountType: "ldap", Source: "jan.csv"},             // kept: different alias
+		{ClientID: "2", EntityAliasName: "alice@corp.com", MountType: "oidc", Source: "jan.csv"}, // dup: ldap/oidc group, normalizes to "alice"
+		{ClientID: "3", EntityAliasName: "alice-t0", MountType: "ldap", Source: "feb.csv"},       // dup: ldap/oidc group, tier stripped → "alice"
+		{ClientID: "4", EntityAliasName: "alice@corp.com", MountType: "jwt", Source: "jan.csv"},  // kept: jwt is a separate group
+		{ClientID: "5", EntityAliasName: "bob", MountType: "ldap", Source: "jan.csv"},            // kept: different alias
 	}
 	out := DeduplicateByAlias(records)
 	if len(out) != 3 {
@@ -843,7 +881,7 @@ func TestDeduplicateByAlias_ScopedToMountType(t *testing.T) {
 	// → they ARE collapsed.
 	records := []Record{
 		{ClientID: "1", EntityAliasName: "alice", MountType: "ldap", Source: "jan.csv"},
-		{ClientID: "2", EntityAliasName: "alice-t0", MountType: "ldap", Source: "jan.csv"},    // dup: same type + base
+		{ClientID: "2", EntityAliasName: "alice-t0", MountType: "ldap", Source: "jan.csv"},      // dup: same type + base
 		{ClientID: "3", EntityAliasName: "alice@corp.com", MountType: "jwt", Source: "jan.csv"}, // kept: different mount type
 	}
 	out := DeduplicateByAlias(records)

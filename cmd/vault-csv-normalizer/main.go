@@ -50,6 +50,7 @@ func main() {
 	var dedup bool
 	var dedupAlias bool
 	var dedupJWT bool
+	var removeAbandonedClients bool
 	var listMethods bool
 	var debugMode bool
 	var perFile bool
@@ -67,6 +68,7 @@ func main() {
 	flag.Var(&dedupMethods, "dedup-methods", "Deduplicate by alias for the specified comma-separated auth methods, treating them as one identity group. Repeatable to define multiple groups (e.g. -dedup-methods ldap,oidc -dedup-methods jwt,saml).")
 	flag.Var(&dedupMethodsPerFile, "dedup-methods-per-file", "Like --dedup-methods but scoped to each input file independently. Records in different files are never collapsed against each other. Repeatable to define multiple groups.")
 	flag.BoolVar(&dedupJWT, "dedup-jwt", false, "Drop JWT records whose normalized alias matches a non-JWT record in the same file (prevents counting the same person via both LDAP/OIDC and JWT)")
+	flag.BoolVar(&removeAbandonedClients, "remove-abandoned-clients", false, "Remove abandoned clients (blank entity_name and entity_alias_name) after deduplication. Includes records with no auth mount and merged/deleted entities.")
 	flag.BoolVar(&listMethods, "list-methods", false, "Print every distinct auth method found in the input files (with record counts and alias coverage), then exit. Useful for deciding --dedup-methods groups.")
 	flag.BoolVar(&debugMode, "debug", false, "Print all records grouped by mount path")
 	flag.BoolVar(&perFile, "per-file", false, "Print a summary for each input file before the combined summary")
@@ -222,6 +224,16 @@ func main() {
 	}
 	if dedupJWT {
 		normalized = normalizer.DeduplicateJWT(normalized)
+	}
+
+	removedAbandonedCounts := normalizer.AbandonedClientCounts{}
+	if removeAbandonedClients {
+		normalized, removedAbandonedCounts = normalizer.FilterAbandonedClients(normalized)
+
+		fmt.Fprintf(os.Stdout, "Removed abandoned clients (total): %d\n", removedAbandonedCounts.Total())
+		fmt.Fprintf(os.Stdout, "  no auth mount (mount path empty): %d\n", removedAbandonedCounts.NoMount)
+		fmt.Fprintf(os.Stdout, "  merged/deleted (mount path present): %d\n", removedAbandonedCounts.MergedDeleted)
+		fmt.Fprintln(os.Stdout, strings.Repeat("-", 70))
 	}
 
 	// Apply filters.
@@ -444,6 +456,9 @@ EXAMPLES:
 
   # Per-file since filters on multiple files
   vault-csv-normalizer -f jan.csv feb.csv --since-file jan.csv=2024-01-15 --since-file feb.csv=2024-02-01
+
+	# Remove abandoned clients (blank entity fields)
+	vault-csv-normalizer -f export.csv --remove-abandoned-clients
 
 CSV FORMAT (Vault activity export):
   Expected columns (order-independent, case-insensitive):
