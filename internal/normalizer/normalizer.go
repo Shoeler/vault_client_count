@@ -639,10 +639,13 @@ func FilterByClientType(records []Record, clientType string) []Record {
 }
 
 // AbandonedClientCounts reports how many anonymous records were removed by
-// FilterAbandonedClients, split by whether an auth mount is present.
+// FilterAbandonedClients, split by whether an auth mount is present and
+// whether the record is a PKI client.
 type AbandonedClientCounts struct {
-	NoMount       int
-	MergedDeleted int
+	NoMount          int
+	NoMountPKI       int
+	MergedDeleted    int
+	MergedDeletedPKI int
 }
 
 // Total returns the sum of removed abandoned-client records.
@@ -660,11 +663,18 @@ func FilterAbandonedClients(records []Record) ([]Record, AbandonedClientCounts) 
 	counts := AbandonedClientCounts{}
 	for _, r := range records {
 		if r.EntityName == "" && r.EntityAliasName == "" && r.ClientType == "entity" {
+			pki := IsPKIClient(r)
 			if r.MountPath == "" {
 				counts.NoMount++
+				if pki {
+					counts.NoMountPKI++
+				}
 				continue
 			}
 			counts.MergedDeleted++
+			if pki {
+				counts.MergedDeletedPKI++
+			}
 			continue
 		}
 		out = append(out, r)

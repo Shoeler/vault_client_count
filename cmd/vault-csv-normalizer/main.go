@@ -231,8 +231,10 @@ func main() {
 		normalized, removedAbandonedCounts = normalizer.FilterAbandonedClients(normalized)
 
 		fmt.Fprintf(os.Stdout, "Removed abandoned clients (total): %d\n", removedAbandonedCounts.Total())
-		fmt.Fprintf(os.Stdout, "  no auth mount (mount path empty): %d\n", removedAbandonedCounts.NoMount)
-		fmt.Fprintf(os.Stdout, "  merged/deleted (mount path present): %d\n", removedAbandonedCounts.MergedDeleted)
+		fmt.Fprintf(os.Stdout, "  no auth mount (mount path empty): %d  (PKI: %d, non-PKI: %d)\n",
+			removedAbandonedCounts.NoMount, removedAbandonedCounts.NoMountPKI, removedAbandonedCounts.NoMount-removedAbandonedCounts.NoMountPKI)
+		fmt.Fprintf(os.Stdout, "  merged/deleted (mount path present): %d  (PKI: %d, non-PKI: %d)\n",
+			removedAbandonedCounts.MergedDeleted, removedAbandonedCounts.MergedDeletedPKI, removedAbandonedCounts.MergedDeleted-removedAbandonedCounts.MergedDeletedPKI)
 		fmt.Fprintln(os.Stdout, strings.Repeat("-", 70))
 	}
 
