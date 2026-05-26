@@ -160,27 +160,6 @@ func ParseTime(raw string) time.Time {
 	return time.Time{} // unparseable → zero value
 }
 
-// Deduplicate removes records with duplicate ClientIDs. When duplicates exist,
-// the record with a non-empty MountPath is preferred over one with an empty
-// MountPath; otherwise the first occurrence is kept.
-func Deduplicate(records []Record) []Record {
-	index := make(map[string]int, len(records)) // client_id → position in out
-	out := make([]Record, 0, len(records))
-	for _, r := range records {
-		i, seen := index[r.ClientID]
-		if !seen {
-			index[r.ClientID] = len(out)
-			out = append(out, r)
-			continue
-		}
-		// Upgrade an empty-mount record if we now have a real mount path.
-		if out[i].MountPath == "" && r.MountPath != "" {
-			out[i] = r
-		}
-	}
-	return out
-}
-
 // BaseAlias returns the portion of an entity alias name before the first '@'
 // character. If no '@' is present the full name is returned.
 // Example: "alice@corp.com" → "alice", "sbishop@hashicorp.com" → "sbishop",
@@ -206,94 +185,10 @@ func StripTierSuffix(name string) string {
 }
 
 // aliasKey is the deduplication key for alias-based dedup: one record is
-// allowed per (normalized alias, mount type) pair across all input files.
-// Including the mount type prevents --dedup-alias from collapsing records
-// across different auth methods (e.g. LDAP vs JWT); use --dedup-jwt for that.
+// allowed per (normalized alias, mount type) pair.
 type aliasKey struct {
 	base      string
 	mountType string
-}
-
-// dedupMountGroup maps mount types that represent the same identity provider
-// to a single canonical value. OIDC and LDAP are treated as one group because
-// the same person typically has the same username in both systems.
-func dedupMountGroup(mt string) string {
-	if mt == "oidc" {
-		return "ldap"
-	}
-	return mt
-}
-
-// aliasKeyFor computes the dedup key for a record. It strips the domain suffix
-// (at '@') and any trailing tier suffix ("-t0"/"-t1"/"-t2"), and scopes the
-// key to the mount group so that only records of the same identity type
-// collapse. OIDC and LDAP share a group; JWT remains separate (use
-// --dedup-jwt for JWT vs LDAP/OIDC dedup).
-func aliasKeyFor(r Record) aliasKey {
-	mt := r.MountType
-	if mt == "" {
-		mt = r.AuthMethod
-	}
-	return aliasKey{
-		base:      StripTierSuffix(BaseAlias(r.EntityAliasName)),
-		mountType: dedupMountGroup(mt),
-	}
-}
-
-// FindAliasDuplicates groups records by (BaseAlias, source file) and returns
-// every group that contains more than one record. Records with a blank
-// EntityAliasName or that are PKI clients are ignored. Groups are returned in
-// the order the first member of each group appeared in records.
-func FindAliasDuplicates(records []Record) [][]Record {
-	type entry struct {
-		key     aliasKey
-		members []Record
-	}
-	index := make(map[aliasKey]int)
-	var entries []entry
-
-	for _, r := range records {
-		if r.EntityAliasName == "" || IsPKIClient(r) {
-			continue
-		}
-		k := aliasKeyFor(r)
-		if idx, ok := index[k]; ok {
-			entries[idx].members = append(entries[idx].members, r)
-		} else {
-			index[k] = len(entries)
-			entries = append(entries, entry{key: k, members: []Record{r}})
-		}
-	}
-
-	var out [][]Record
-	for _, e := range entries {
-		if len(e.members) > 1 {
-			out = append(out, e.members)
-		}
-	}
-	return out
-}
-
-// DeduplicateByAlias keeps at most one record per (BaseAlias, source file)
-// combination. The same user authenticating via multiple mount accessors in
-// the same file is collapsed to one record. Records with a blank
-// EntityAliasName or that are PKI clients are always kept.
-func DeduplicateByAlias(records []Record) []Record {
-	seen := make(map[aliasKey]struct{}, len(records))
-	out := make([]Record, 0, len(records))
-	for _, r := range records {
-		if r.EntityAliasName == "" || IsPKIClient(r) {
-			out = append(out, r)
-			continue
-		}
-		k := aliasKeyFor(r)
-		if _, dup := seen[k]; dup {
-			continue
-		}
-		seen[k] = struct{}{}
-		out = append(out, r)
-	}
-	return out
 }
 
 // buildMethodGroupMap converts a list of groups (each a slice of mount-type
@@ -312,96 +207,6 @@ func buildMethodGroupMap(groups [][]string) map[string]string {
 		}
 	}
 	return m
-}
-
-// aliasKeyForMethods computes the dedup key for a record using a caller-supplied
-// group map (from buildMethodGroupMap). If the record's mount type is not in the
-// map the second return value is false, meaning the record should not participate
-// in method-scoped dedup.
-func aliasKeyForMethods(r Record, groupMap map[string]string) (aliasKey, bool) {
-	mt := r.MountType
-	if mt == "" {
-		mt = r.AuthMethod
-	}
-	canonical, ok := groupMap[mt]
-	if !ok {
-		return aliasKey{}, false
-	}
-	return aliasKey{
-		base:      StripTierSuffix(BaseAlias(r.EntityAliasName)),
-		mountType: canonical,
-	}, true
-}
-
-// FindAliasDuplicatesForMethods is the same as FindAliasDuplicates but only
-// considers records whose auth method (MountType or AuthMethod) appears in one
-// of the provided groups. Each group is a slice of mount-type strings that
-// should be treated as the same identity (e.g. ["ldap","oidc"]). Records whose
-// method is not in any group are not reported. Groups are independent: records
-// in different groups are never compared against each other.
-func FindAliasDuplicatesForMethods(records []Record, groups [][]string) [][]Record {
-	groupMap := buildMethodGroupMap(groups)
-
-	type entry struct {
-		key     aliasKey
-		members []Record
-	}
-	index := make(map[aliasKey]int)
-	var entries []entry
-
-	for _, r := range records {
-		if r.EntityAliasName == "" || IsPKIClient(r) {
-			continue
-		}
-		k, ok := aliasKeyForMethods(r, groupMap)
-		if !ok {
-			continue
-		}
-		if idx, exists := index[k]; exists {
-			entries[idx].members = append(entries[idx].members, r)
-		} else {
-			index[k] = len(entries)
-			entries = append(entries, entry{key: k, members: []Record{r}})
-		}
-	}
-
-	var out [][]Record
-	for _, e := range entries {
-		if len(e.members) > 1 {
-			out = append(out, e.members)
-		}
-	}
-	return out
-}
-
-// DeduplicateByAliasForMethods applies the same alias dedup logic as
-// DeduplicateByAlias but only for records whose auth method appears in one of
-// the provided groups. Each group is a slice of mount-type strings treated as
-// one identity (e.g. ["ldap","oidc"]). Records whose method is not in any group
-// pass through unchanged. Records with a blank EntityAliasName or that are PKI
-// clients are always kept.
-func DeduplicateByAliasForMethods(records []Record, groups [][]string) []Record {
-	groupMap := buildMethodGroupMap(groups)
-	seen := make(map[aliasKey]struct{}, len(records))
-	out := make([]Record, 0, len(records))
-	for _, r := range records {
-		if r.EntityAliasName == "" || IsPKIClient(r) {
-			out = append(out, r)
-			continue
-		}
-		k, ok := aliasKeyForMethods(r, groupMap)
-		if !ok {
-			// Method not in any group — pass through untouched.
-			out = append(out, r)
-			continue
-		}
-		if _, dup := seen[k]; dup {
-			continue
-		}
-		seen[k] = struct{}{}
-		out = append(out, r)
-	}
-	return out
 }
 
 // aliasKeyInFile is the deduplication key for per-file alias dedup. It includes
@@ -450,11 +255,10 @@ func aliasKeyInFileFor(r Record, groupMap map[string]string) (aliasKeyInFile, bo
 	}, true
 }
 
-// FindAliasDuplicatesForMethodsPerFile is like FindAliasDuplicatesForMethods
-// but only collapses records within the same source file. Records in different
-// files with the same alias are not reported as duplicates. Matching uses only
-// the portion of the alias left of '@'; tier suffixes (-t0/-t1/-t2) are not
-// stripped and must match exactly.
+// FindAliasDuplicatesForMethodsPerFile groups records by normalized alias within
+// each source file. Records in different files with the same alias are not
+// reported as duplicates. Matching uses only the portion of the alias left of
+// '@'; tier suffixes (-t0/-t1/-t2) are not stripped and must match exactly.
 func FindAliasDuplicatesForMethodsPerFile(records []Record, groups [][]string) [][]Record {
 	groupMap := buildMethodGroupMap(groups)
 
@@ -490,9 +294,9 @@ func FindAliasDuplicatesForMethodsPerFile(records []Record, groups [][]string) [
 	return out
 }
 
-// DeduplicateByAliasForMethodsPerFile applies alias dedup like
-// DeduplicateByAliasForMethods but scoped to each source file independently.
-// Records in different files are never collapsed; only records from the same
+// DeduplicateByAliasForMethodsPerFile deduplicates by alias scoped to each
+// source file independently. Records in different files are never collapsed;
+// only records from the same
 // file with the same normalized alias and method group are deduplicated.
 // Matching uses only the portion of the alias left of '@'; tier suffixes
 // (-t0/-t1/-t2) are not stripped and must match exactly.
@@ -515,42 +319,6 @@ func DeduplicateByAliasForMethodsPerFile(records []Record, groups [][]string) []
 			continue
 		}
 		seen[kf] = struct{}{}
-		out = append(out, r)
-	}
-	return out
-}
-
-// isJWT reports whether r was authenticated via JWT.
-func isJWT(r Record) bool {
-	return r.MountType == "jwt" || r.AuthMethod == "jwt"
-}
-
-// DeduplicateJWT drops JWT records whose normalized alias (StripTierSuffix +
-// BaseAlias) matches a non-JWT record's normalized alias in the same source
-// file. This prevents the same person from being counted once for their LDAP
-// or OIDC identity and again for their JWT identity. Records without an alias
-// are always kept.
-func DeduplicateJWT(records []Record) []Record {
-	// Build global set of normalized aliases from all non-JWT records.
-	nonJWTAliases := make(map[string]struct{})
-	for _, r := range records {
-		if isJWT(r) || r.EntityAliasName == "" {
-			continue
-		}
-		norm := StripTierSuffix(BaseAlias(r.EntityAliasName))
-		if norm != "" {
-			nonJWTAliases[norm] = struct{}{}
-		}
-	}
-
-	out := make([]Record, 0, len(records))
-	for _, r := range records {
-		if isJWT(r) && r.EntityAliasName != "" {
-			norm := StripTierSuffix(BaseAlias(r.EntityAliasName))
-			if _, match := nonJWTAliases[norm]; match {
-				continue
-			}
-		}
 		out = append(out, r)
 	}
 	return out

@@ -4,6 +4,7 @@
 # Claude
 .claude/
 CLAUDE.md
+CLAUDE.local.md
 
 # Test data outputs
 testdata/out.csv
