@@ -162,24 +162,12 @@ func ParseTime(raw string) time.Time {
 
 // BaseAlias returns the portion of an entity alias name before the first '@'
 // character. If no '@' is present the full name is returned.
-// Example: "alice@corp.com" → "alice", "sbishop@hashicorp.com" → "sbishop",
-// "sbishop-t0" → "sbishop-t0".
+// Example: "alice@corp.com" → "alice", "sbishop@hashicorp.com" → "sbishop".
 func BaseAlias(name string) string {
 	for i, ch := range name {
 		if ch == '@' {
 			return name[:i]
 		}
-	}
-	return name
-}
-
-// StripTierSuffix removes a trailing "-t0", "-t1", or "-t2" suffix from name.
-// Other suffixes are left unchanged.
-// Example: "alice-t0" → "alice", "bob-t2" → "bob", "carol-t3" → "carol-t3".
-func StripTierSuffix(name string) string {
-	n := len(name)
-	if n >= 3 && name[n-3] == '-' && name[n-2] == 't' && name[n-1] >= '0' && name[n-1] <= '2' {
-		return name[:n-3]
 	}
 	return name
 }

@@ -94,6 +94,13 @@ OPTIONS:
         both blank. This includes records with no auth mount (mount_path
         empty) and merged/deleted entities (mount_path present). Applied after
         all deduplication steps.
+  -generate-tf
+        Generate Terraform HCL stubs for entity clients with no alias in the
+        export. Requires --dedup-methods-per-file. A client is targeted when
+        entity_alias_name is blank and mount_accessor is non-empty. For each
+        such client, vault_identity_entity and vault_identity_entity_alias
+        resources are written to vault-aliases.tf. Mount accessors are emitted
+        as Terraform variables. Does not affect counts or summary output.
   -per-file
         Print a summary for each input file before the combined summary
   -debug
@@ -149,6 +156,9 @@ vault-csv-normalizer -f export.csv --debug
 
 # Remove abandoned clients from final totals
 vault-csv-normalizer -f export.csv --remove-abandoned-clients
+
+# Generate Terraform stubs for unaliased LDAP/OIDC clients
+vault-csv-normalizer -f export.csv --dedup-methods-per-file ldap,oidc --generate-tf
 
 # Same as above, with debug count output for removed rows
 vault-csv-normalizer -f export.csv --remove-abandoned-clients --debug
@@ -215,23 +225,56 @@ Vault can record the same human as multiple clients when they authenticate via
 different auth methods (e.g. LDAP in one session and OIDC in another).
 `--dedup-methods-per-file` collapses these into a single count within each file.
 
+### How deduplication works
+
+Each auth method stores a different value as the entity alias in Vault:
+
+| Auth method | What Vault stores as `entity_alias_name` |
+|---|---|
+| `ldap` | Bare username: `alice` |
+| `oidc` | Bare username (from `entity_alias_metadata.username`): `alice` |
+| `jwt` | Full email address: `alice@corp.com` |
+
+The tool normalizes all three to a common base by stripping the domain suffix
+(`alice@corp.com` → `alice`), then matches records within the same file that
+share the same normalized alias and belong to the same method group.
+
+**This only works when the same string is used as the identity across all auth
+methods.** If `alice` logs in via LDAP as `alice` and via JWT as
+`alice@corp.com`, the normalization produces `alice` for both — they collapse.
+If the LDAP username and the JWT email prefix do not match (e.g. `asmith` vs
+`alice.smith@corp.com`), the records will not be collapsed.
+
+### Required conditions for cross-method dedup
+
+All of the following must be true for two records to be deduplicated:
+
+1. Both records are in the **same source file** — records across files are never collapsed.
+2. Both records' auth methods appear in the **same comma-separated list** passed to `--dedup-methods-per-file`. With `--dedup-methods-per-file ldap,oidc,jwt`, an LDAP and a JWT record can collapse. With `--dedup-methods-per-file ldap,oidc --dedup-methods-per-file jwt,saml`, an LDAP and a JWT record will never collapse — they are in separate groups.
+3. Both records have a **non-empty `entity_alias_name`** (or `entity_alias_metadata.username` for OIDC).
+4. The **normalized alias matches** — after stripping the domain suffix, the alias strings are identical.
+5. Neither record is a **PKI client** (`client_type=acme` or `mount_accessor` prefix `auth_cert`).
+
+If any condition is not met, both records pass through unchanged.
+
 ### Alias normalization
 
 `--dedup-methods-per-file` applies one normalization step before comparing:
 
-1. **Strip domain suffix** — everything from `@` onward is removed.
-   `alice@corp.com` → `alice`
+**Strip domain suffix** — everything from `@` onward is removed.
+`alice@corp.com` → `alice`
 
-Tier suffixes (`-t0`, `-t1`, `-t2`) are **not** stripped — `alice-t0` and
-`alice-t1` are treated as distinct identities within a file.
+This lets JWT records (which use full email addresses) match LDAP/OIDC records
+(which use bare usernames), provided the local part of the email is the same
+as the LDAP/OIDC username.
 
 ### Auth methods reference
 
 | `mount_type` / `auth_method` | Typical users | Notes |
 |---|---|---|
-| `ldap` | Humans | Aliases usually bare usernames (`alice`) or tiered (`alice-t0`) |
-| `oidc` | Humans | Aliases usually `username@domain.com` — strip domain to match LDAP |
-| `jwt` | Humans or services | May share aliases with LDAP/OIDC; include in group to collapse |
+| `ldap` | Humans | Aliases are bare usernames (`alice`) |
+| `oidc` | Humans | Aliases are bare usernames from `entity_alias_metadata.username` (`alice`) |
+| `jwt` | Humans or services | Aliases are full email addresses (`alice@corp.com`); domain is stripped to match LDAP/OIDC |
 | `approle` | Service accounts | Not human; not typically alias-deduped |
 | `kubernetes` | Service accounts | Not human; not typically alias-deduped |
 | `aws` / `gcp` | Service accounts | Not human; not typically alias-deduped |

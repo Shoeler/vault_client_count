@@ -241,7 +241,7 @@ func TestBaseAlias(t *testing.T) {
 		{"alice@corp.com", "alice"},
 		{"sbishop@hashicorp.com", "sbishop"},
 		{"abc@234", "abc"},
-		{"sbishop-t0", "sbishop-t0"}, // BaseAlias alone does not strip tier
+		{"sbishop-t0", "sbishop-t0"},
 		{"plain", "plain"},
 		{"", ""},
 		{"@leading", ""},
@@ -250,44 +250,6 @@ func TestBaseAlias(t *testing.T) {
 		got := BaseAlias(c.in)
 		if got != c.want {
 			t.Errorf("BaseAlias(%q) = %q, want %q", c.in, got, c.want)
-		}
-	}
-}
-
-func TestStripTierSuffix(t *testing.T) {
-	cases := []struct{ in, want string }{
-		{"alice-t0", "alice"},
-		{"alice-t1", "alice"},
-		{"alice-t2", "alice"},
-		{"alice-t3", "alice-t3"}, // only t0–t2 are stripped
-		{"alice-t10", "alice-t10"},
-		{"alice-T0", "alice-T0"}, // case-sensitive
-		{"alice", "alice"},
-		{"-t0", ""},  // degenerate: only the suffix
-		{"t0", "t0"}, // no hyphen
-		{"", ""},
-	}
-	for _, c := range cases {
-		got := StripTierSuffix(c.in)
-		if got != c.want {
-			t.Errorf("StripTierSuffix(%q) = %q, want %q", c.in, got, c.want)
-		}
-	}
-}
-
-func TestStripTierSuffix_AfterBaseAlias(t *testing.T) {
-	// Strip domain then tier suffix.
-	cases := []struct{ in, want string }{
-		{"alice-t0@corp.com", "alice"},
-		{"alice-t1@corp.com", "alice"},
-		{"alice@corp.com", "alice"},
-		{"alice-t0", "alice"},
-		{"alice", "alice"},
-	}
-	for _, c := range cases {
-		got := StripTierSuffix(BaseAlias(c.in))
-		if got != c.want {
-			t.Errorf("StripTierSuffix(BaseAlias(%q)) = %q, want %q", c.in, got, c.want)
 		}
 	}
 }

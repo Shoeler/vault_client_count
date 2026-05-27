@@ -12,6 +12,7 @@ import (
 	"github.com/vault-csv-normalizer/internal/normalizer"
 	"github.com/vault-csv-normalizer/internal/parser"
 	"github.com/vault-csv-normalizer/internal/renderer"
+	"github.com/vault-csv-normalizer/internal/tfgen"
 )
 
 // multiFlag allows a flag to be specified multiple times.
@@ -47,6 +48,7 @@ func main() {
 	var filterSinceFile = make(fileDateFlag)
 	var countPKI bool
 	var removeAbandonedClients bool
+	var generateTF bool
 	var listMethods bool
 	var debugMode bool
 	var perFile bool
@@ -61,6 +63,7 @@ func main() {
 	flag.BoolVar(&countPKI, "p", false, "Partition and report PKI/cert clients (client_type=acme or mount_accessor prefix auth_cert) separately")
 	flag.Var(&dedupMethodsPerFile, "dedup-methods-per-file", "Deduplicate by alias for the specified comma-separated auth methods, scoped to each input file independently. Records in different files are never collapsed against each other. Repeatable to define multiple groups.")
 	flag.BoolVar(&removeAbandonedClients, "remove-abandoned-clients", false, "Remove abandoned clients (blank entity_name and entity_alias_name) after deduplication. Includes records with no auth mount and merged/deleted entities.")
+	flag.BoolVar(&generateTF, "generate-tf", false, "Generate Terraform HCL stubs for entity clients with no alias. Requires --dedup-methods-per-file. Output written to vault-aliases.tf.")
 	flag.BoolVar(&listMethods, "list-methods", false, "Print every distinct auth method found in the input files (with record counts and alias coverage), then exit. Useful for deciding --dedup-methods-per-file groups.")
 	flag.BoolVar(&debugMode, "debug", false, "Print all records grouped by mount path")
 	flag.BoolVar(&perFile, "per-file", false, "Print a summary for each input file before the combined summary")
@@ -134,7 +137,7 @@ func main() {
 			for _, group := range groups {
 				r0 := group[0]
 				fmt.Fprintf(os.Stdout, "\nAlias group: %q  file: %s\n",
-					normalizer.StripTierSuffix(normalizer.BaseAlias(r0.EntityAliasName)), filepath.Base(r0.Source))
+					normalizer.BaseAlias(r0.EntityAliasName), filepath.Base(r0.Source))
 				renderer.PrintTable(os.Stdout, group)
 			}
 			fmt.Fprintln(os.Stdout)
@@ -153,6 +156,9 @@ func main() {
 			removedAbandonedCounts.MergedDeleted, removedAbandonedCounts.MergedDeletedPKI, removedAbandonedCounts.MergedDeleted-removedAbandonedCounts.MergedDeletedPKI)
 		fmt.Fprintln(os.Stdout, strings.Repeat("-", 70))
 	}
+
+	// Snapshot post-dedup records before filters for --generate-tf.
+	preFilterRecords := normalized
 
 	// Apply filters.
 	if filterNS != "" {
@@ -174,6 +180,23 @@ func main() {
 	if err := normalizer.Sort(normalized, sortBy); err != nil {
 		fmt.Fprintf(os.Stderr, "sort error: %v\n", err)
 		os.Exit(1)
+	}
+
+	if generateTF {
+		if len(methodGroupsPerFile) == 0 {
+			fmt.Fprintln(os.Stderr, "warning: --generate-tf has no effect without --dedup-methods-per-file")
+		} else {
+			n, err := tfgen.GenerateTF(preFilterRecords, methodGroupsPerFile, "vault-aliases.tf")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error: --generate-tf: %v\n", err)
+				os.Exit(1)
+			}
+			if n == 0 {
+				fmt.Fprintln(os.Stdout, "generate-tf: no unaliased clients found in the specified method groups")
+			} else {
+				fmt.Fprintf(os.Stdout, "generate-tf: wrote %d entity stub(s) to vault-aliases.tf\n", n)
+			}
+		}
 	}
 
 	if debugMode {
@@ -204,7 +227,7 @@ func main() {
 					if r.EntityAliasName == "" {
 						continue
 					}
-					norm := normalizer.StripTierSuffix(normalizer.BaseAlias(r.EntityAliasName))
+					norm := normalizer.BaseAlias(r.EntityAliasName)
 					aliasToIDs[norm] = append(aliasToIDs[norm], r.ClientID)
 				}
 				for alias, ids := range aliasToIDs {
