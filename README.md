@@ -28,8 +28,6 @@ versions), and displays a summary of client counts by mount path and type.
 ## Installation
 
 ```bash
-git clone https://github.com/your-org/vault-csv-normalizer
-cd vault-csv-normalizer
 make build
 # Binary is at ./bin/vault-csv-normalizer
 ```
