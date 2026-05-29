@@ -172,13 +172,6 @@ func BaseAlias(name string) string {
 	return name
 }
 
-// aliasKey is the deduplication key for alias-based dedup: one record is
-// allowed per (normalized alias, mount type) pair.
-type aliasKey struct {
-	base      string
-	mountType string
-}
-
 // buildMethodGroupMap converts a list of groups (each a slice of mount-type
 // strings) into a map from every member to the group's canonical value (the
 // first element of the group). Methods not present in any group are absent

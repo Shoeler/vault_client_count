@@ -1,6 +1,11 @@
-# vault-csv-normalizer
+# vault-csv-count
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+> **Disclaimer:** This is an unofficial, community-provided tool. It is not
+> created, endorsed, or supported by HashiCorp or IBM. Use at your own risk.
+> No warranty is provided. For official Vault client counting guidance, refer
+> to the [HashiCorp Vault documentation](https://developer.hashicorp.com/vault/docs).
 
 A CLI tool that reads one or more **HashiCorp Vault client export CSV files**,
 normalizes their data (consistent column names, types, and values across Vault

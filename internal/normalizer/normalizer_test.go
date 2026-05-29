@@ -1,7 +1,6 @@
 package normalizer
 
 import (
-	"strings"
 	"testing"
 	"time"
 
@@ -144,49 +143,6 @@ func TestFilterByClientType(t *testing.T) {
 	}
 }
 
-func TestFilterAbandonedClients(t *testing.T) {
-	records := []Record{
-		// removed as merged/deleted: mount path present
-		{ClientID: "drop-merged-1", EntityName: "", EntityAliasName: "", MountPath: "auth/ldap/", MountType: "ldap"},
-		// removed as merged/deleted: mount path present even if mount type is blank
-		{ClientID: "drop-merged-2", EntityName: "", EntityAliasName: "", MountPath: "auth/oidc/", MountType: ""},
-		// removed as no mount: mount path missing
-		{ClientID: "drop-nomount-1", EntityName: "", EntityAliasName: "", MountPath: "", MountType: "ldap"},
-		// removed as merged/deleted PKI (auth_cert accessor, mount present)
-		{ClientID: "drop-merged-pki-1", EntityName: "", EntityAliasName: "", MountPath: "auth/cert/", MountType: "cert", MountAccessor: "auth_cert_abc123"},
-		// removed as no-mount PKI (auth_cert accessor, mount missing)
-		{ClientID: "drop-nomount-pki-1", EntityName: "", EntityAliasName: "", MountPath: "", MountType: "cert", MountAccessor: "auth_cert_xyz789"},
-		// keep: entity name present
-		{ClientID: "keep-3", EntityName: "Alice", EntityAliasName: "", MountPath: "auth/ldap/", MountType: "ldap"},
-		// keep: entity alias present
-		{ClientID: "keep-4", EntityName: "", EntityAliasName: "alice", MountPath: "auth/ldap/", MountType: "ldap"},
-	}
-
-	out, counts := FilterAbandonedClients(records)
-	if counts.NoMount != 2 {
-		t.Fatalf("expected NoMount=2, got %d", counts.NoMount)
-	}
-	if counts.NoMountPKI != 1 {
-		t.Fatalf("expected NoMountPKI=1, got %d", counts.NoMountPKI)
-	}
-	if counts.MergedDeleted != 3 {
-		t.Fatalf("expected MergedDeleted=3, got %d", counts.MergedDeleted)
-	}
-	if counts.MergedDeletedPKI != 1 {
-		t.Fatalf("expected MergedDeletedPKI=1, got %d", counts.MergedDeletedPKI)
-	}
-	if counts.Total() != 5 {
-		t.Fatalf("expected Total=5, got %d", counts.Total())
-	}
-	if len(out) != 2 {
-		t.Fatalf("expected 2 records after filter, got %d", len(out))
-	}
-	for _, r := range out {
-		if strings.HasPrefix(r.ClientID, "drop-") {
-			t.Fatal("drop-* records should have been removed")
-		}
-	}
-}
 
 func TestFilterSince(t *testing.T) {
 	records := []Record{

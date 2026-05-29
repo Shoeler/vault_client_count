@@ -129,12 +129,13 @@ func main() {
 	}
 
 	preDedup := normalized
+	var aliasGroups [][]normalizer.Record
 	if len(methodGroupsPerFile) > 0 {
-		groups := normalizer.FindAliasDuplicatesForMethodsPerFile(preDedup, methodGroupsPerFile)
-		if len(groups) > 0 {
-			fmt.Fprintf(os.Stdout, "Per-file method-scoped alias duplicates found (%d group(s))\n", len(groups))
+		aliasGroups = normalizer.FindAliasDuplicatesForMethodsPerFile(preDedup, methodGroupsPerFile)
+		if len(aliasGroups) > 0 {
+			fmt.Fprintf(os.Stdout, "Per-file method-scoped alias duplicates found (%d group(s))\n", len(aliasGroups))
 			fmt.Fprintln(os.Stdout, "=====================================================")
-			for _, group := range groups {
+			for _, group := range aliasGroups {
 				r0 := group[0]
 				fmt.Fprintf(os.Stdout, "\nAlias group: %q  file: %s\n",
 					normalizer.BaseAlias(r0.EntityAliasName), filepath.Base(r0.Source))
@@ -156,9 +157,6 @@ func main() {
 			removedAbandonedCounts.MergedDeleted, removedAbandonedCounts.MergedDeletedPKI, removedAbandonedCounts.MergedDeleted-removedAbandonedCounts.MergedDeletedPKI)
 		fmt.Fprintln(os.Stdout, strings.Repeat("-", 70))
 	}
-
-	// Snapshot post-dedup records before filters for --generate-tf.
-	preFilterRecords := normalized
 
 	// Apply filters.
 	if filterNS != "" {
@@ -186,13 +184,13 @@ func main() {
 		if len(methodGroupsPerFile) == 0 {
 			fmt.Fprintln(os.Stderr, "warning: --generate-tf has no effect without --dedup-methods-per-file")
 		} else {
-			n, err := tfgen.GenerateTF(preFilterRecords, methodGroupsPerFile, "vault-aliases.tf")
+			n, err := tfgen.GenerateTF(aliasGroups, "vault-aliases.tf")
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "error: --generate-tf: %v\n", err)
 				os.Exit(1)
 			}
 			if n == 0 {
-				fmt.Fprintln(os.Stdout, "generate-tf: no unaliased clients found in the specified method groups")
+				fmt.Fprintln(os.Stdout, "generate-tf: no alias groups found — nothing to generate")
 			} else {
 				fmt.Fprintf(os.Stdout, "generate-tf: wrote %d entity stub(s) to vault-aliases.tf\n", n)
 			}
