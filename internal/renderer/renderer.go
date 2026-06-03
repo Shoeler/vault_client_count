@@ -28,16 +28,6 @@ var columns = []column{
 		get:    func(r normalizer.Record) string { return r.NamespacePath },
 	},
 	{
-		header: "Client Type",
-		width:  12,
-		get:    func(r normalizer.Record) string { return r.ClientType },
-	},
-	{
-		header: "Auth Method",
-		width:  12,
-		get:    func(r normalizer.Record) string { return r.AuthMethod },
-	},
-	{
 		header: "Mount Path",
 		width:  12,
 		get:    func(r normalizer.Record) string { return r.MountPath },
@@ -74,23 +64,43 @@ var aliasColumn = column{
 	get:    func(r normalizer.Record) string { return r.EntityAliasName },
 }
 
+var oidcUsernameColumn = column{
+	header: "OIDC Username",
+	width:  13,
+	get:    func(r normalizer.Record) string { return r.EntityAliasMetadataUsername },
+}
+
 // PrintTable writes the records as a plain-text table to w. If any record has
 // a non-empty EntityAliasName, an Entity Alias column is appended so the
-// original alias values are visible in alias deduplication output.
+// original alias values are visible in alias deduplication output. If any
+// record has a non-empty EntityAliasMetadataUsername, an OIDC Username column
+// is also appended.
 func PrintTable(w io.Writer, records []normalizer.Record) {
 	if len(records) == 0 {
 		fmt.Fprintln(w, "(no records to display)")
 		return
 	}
 
-	// Build column list, appending the alias column only when the data has it.
+	// Build column list, appending extra columns only when the data has them.
 	cols := make([]column, len(columns))
 	copy(cols, columns)
+	var hasAlias, hasOIDCUsername bool
 	for _, r := range records {
 		if r.EntityAliasName != "" {
-			cols = append(cols, aliasColumn)
+			hasAlias = true
+		}
+		if r.EntityAliasMetadataUsername != "" {
+			hasOIDCUsername = true
+		}
+		if hasAlias && hasOIDCUsername {
 			break
 		}
+	}
+	if hasAlias {
+		cols = append(cols, aliasColumn)
+	}
+	if hasOIDCUsername {
+		cols = append(cols, oidcUsernameColumn)
 	}
 
 	for _, r := range records {

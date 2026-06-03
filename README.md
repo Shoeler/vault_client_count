@@ -111,11 +111,19 @@ OPTIONS:
         counted twice when they authenticate via both LDAP/OIDC and JWT.
         Records without an alias are always kept. May be combined with
         --dedup-alias, --dedup-methods, and/or -d.
+  -remove-abandoned-clients
+        Remove abandoned clients where entity_name and entity_alias_name are
+        both blank. This includes records with no auth mount (mount_path
+        empty) and merged/deleted entities (mount_path present). Applied after
+        all deduplication steps.
   -per-file
         Print a summary for each input file before the combined summary
   -debug
         Print all records grouped by mount path, with a full record table under
         each mount. Records with no mount path are grouped as "(no mount)".
+      Also prints how many records were removed by
+      --remove-abandoned-clients when that flag is enabled, split into
+      no-mount and merged/deleted buckets.
   -help
         Show usage information
 ```
@@ -177,6 +185,12 @@ vault-csv-normalizer -f export.csv --dedup-jwt
 
 # Full dedup: collapse tiers, dedup client_ids, then drop redundant JWT records
 vault-csv-normalizer -f jan.csv feb.csv --dedup-alias -d --dedup-jwt
+
+# Remove abandoned clients from final totals
+vault-csv-normalizer -f export.csv --remove-abandoned-clients
+
+# Same as above, with debug count output for removed rows
+vault-csv-normalizer -f export.csv --remove-abandoned-clients --debug
 
 # Deduplicate LDAP and OIDC as one identity group — same person via either
 # method is counted once; other auth methods are unaffected

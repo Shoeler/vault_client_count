@@ -6,9 +6,9 @@ import (
 )
 
 func TestParseReader_StandardColumns(t *testing.T) {
-	csv := `client_id,namespace_id,namespace_path,mount_accessor,mount_path,mount_type,auth_method,client_type,token_creation_time,client_first_usage_time
-abc-123,root,[root],auth_approle_abc,auth/approle/,approle,approle,entity,2024-01-15T10:00:00Z,2024-01-15T12:00:00Z
-def-456,ns1,education/,auth_ldap_xyz,auth/ldap/,ldap,ldap,non-entity,2024-02-01T08:00:00Z,
+	csv := `client_id,entity_name,namespace_id,namespace_path,mount_accessor,mount_path,mount_type,auth_method,client_type,token_creation_time,client_first_usage_time
+abc-123,Alice Smith,root,[root],auth_approle_abc,auth/approle/,approle,approle,entity,2024-01-15T10:00:00Z,2024-01-15T12:00:00Z
+def-456,,ns1,education/,auth_ldap_xyz,auth/ldap/,ldap,ldap,non-entity,2024-02-01T08:00:00Z,
 `
 	records, err := parseReader(strings.NewReader(csv), "test.csv")
 	if err != nil {
@@ -20,6 +20,7 @@ def-456,ns1,education/,auth_ldap_xyz,auth/ldap/,ldap,ldap,non-entity,2024-02-01T
 
 	r := records[0]
 	assertEqual(t, "client_id", "abc-123", r.ClientID)
+	assertEqual(t, "entity_name", "Alice Smith", r.EntityName)
 	assertEqual(t, "namespace_id", "root", r.NamespaceID)
 	assertEqual(t, "namespace_path", "[root]", r.NamespacePath)
 	assertEqual(t, "mount_accessor", "auth_approle_abc", r.MountAccessor)
@@ -30,6 +31,7 @@ def-456,ns1,education/,auth_ldap_xyz,auth/ldap/,ldap,ldap,non-entity,2024-02-01T
 	assertEqual(t, "client_first_usage_time", "2024-01-15T12:00:00Z", r.ClientFirstUsageTime)
 
 	r2 := records[1]
+	assertEqual(t, "entity_name_empty", "", r2.EntityName)
 	assertEqual(t, "client_first_usage_time_empty", "", r2.ClientFirstUsageTime)
 }
 

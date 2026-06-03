@@ -40,6 +40,7 @@ func (f fileDateFlag) Set(v string) error {
 func main() {
 	var inputFiles multiFlag
 	var dedupMethods multiFlag
+	var dedupMethodsPerFile multiFlag
 	var sortBy string
 	var filterNS string
 	var filterType string
@@ -49,6 +50,7 @@ func main() {
 	var dedup bool
 	var dedupAlias bool
 	var dedupJWT bool
+	var removeAbandonedClients bool
 	var listMethods bool
 	var debugMode bool
 	var perFile bool
@@ -64,7 +66,9 @@ func main() {
 	flag.BoolVar(&dedup, "d", false, "Deduplicate records by client_id across all input files")
 	flag.BoolVar(&dedupAlias, "dedup-alias", false, "Deduplicate by entity_alias_name (strips domain and -t0/-t1/-t2 tier suffixes; records without an alias are always kept; may be combined with -d)")
 	flag.Var(&dedupMethods, "dedup-methods", "Deduplicate by alias for the specified comma-separated auth methods, treating them as one identity group. Repeatable to define multiple groups (e.g. -dedup-methods ldap,oidc -dedup-methods jwt,saml).")
+	flag.Var(&dedupMethodsPerFile, "dedup-methods-per-file", "Like --dedup-methods but scoped to each input file independently. Records in different files are never collapsed against each other. Repeatable to define multiple groups.")
 	flag.BoolVar(&dedupJWT, "dedup-jwt", false, "Drop JWT records whose normalized alias matches a non-JWT record in the same file (prevents counting the same person via both LDAP/OIDC and JWT)")
+	flag.BoolVar(&removeAbandonedClients, "remove-abandoned-clients", false, "Remove abandoned clients (blank entity_name and entity_alias_name) after deduplication. Includes records with no auth mount and merged/deleted entities.")
 	flag.BoolVar(&listMethods, "list-methods", false, "Print every distinct auth method found in the input files (with record counts and alias coverage), then exit. Useful for deciding --dedup-methods groups.")
 	flag.BoolVar(&debugMode, "debug", false, "Print all records grouped by mount path")
 	flag.BoolVar(&perFile, "per-file", false, "Print a summary for each input file before the combined summary")
@@ -131,6 +135,20 @@ func main() {
 		}
 	}
 
+	var methodGroupsPerFile [][]string
+	for _, val := range dedupMethodsPerFile {
+		var group []string
+		for _, m := range strings.Split(val, ",") {
+			m = strings.TrimSpace(strings.ToLower(m))
+			if m != "" {
+				group = append(group, m)
+			}
+		}
+		if len(group) > 0 {
+			methodGroupsPerFile = append(methodGroupsPerFile, group)
+		}
+	}
+
 	// Snapshot pre-dedup records so debug mode can show alias groups from the
 	// original data regardless of which dedup flags are active.
 	preDedup := normalized
@@ -164,6 +182,21 @@ func main() {
 		}
 		normalized = normalizer.DeduplicateByAliasForMethods(normalized, methodGroups)
 	}
+	if len(methodGroupsPerFile) > 0 {
+		groups := normalizer.FindAliasDuplicatesForMethodsPerFile(preDedup, methodGroupsPerFile)
+		if len(groups) > 0 {
+			fmt.Fprintf(os.Stdout, "Per-file method-scoped alias duplicates found (%d group(s))\n", len(groups))
+			fmt.Fprintln(os.Stdout, "=====================================================")
+			for _, group := range groups {
+				r0 := group[0]
+				fmt.Fprintf(os.Stdout, "\nAlias group: %q  file: %s\n",
+					normalizer.StripTierSuffix(normalizer.BaseAlias(r0.EntityAliasName)), filepath.Base(r0.Source))
+				renderer.PrintTable(os.Stdout, group)
+			}
+			fmt.Fprintln(os.Stdout)
+		}
+		normalized = normalizer.DeduplicateByAliasForMethodsPerFile(normalized, methodGroupsPerFile)
+	}
 
 	// Collect -d dedup statistics before running so debug mode can report
 	// exactly which client_ids were (or weren't) collapsed.
@@ -191,6 +224,18 @@ func main() {
 	}
 	if dedupJWT {
 		normalized = normalizer.DeduplicateJWT(normalized)
+	}
+
+	removedAbandonedCounts := normalizer.AbandonedClientCounts{}
+	if removeAbandonedClients {
+		normalized, removedAbandonedCounts = normalizer.FilterAbandonedClients(normalized)
+
+		fmt.Fprintf(os.Stdout, "Removed abandoned clients (total): %d\n", removedAbandonedCounts.Total())
+		fmt.Fprintf(os.Stdout, "  no auth mount (mount path empty): %d  (PKI: %d, non-PKI: %d)\n",
+			removedAbandonedCounts.NoMount, removedAbandonedCounts.NoMountPKI, removedAbandonedCounts.NoMount-removedAbandonedCounts.NoMountPKI)
+		fmt.Fprintf(os.Stdout, "  merged/deleted (mount path present): %d  (PKI: %d, non-PKI: %d)\n",
+			removedAbandonedCounts.MergedDeleted, removedAbandonedCounts.MergedDeletedPKI, removedAbandonedCounts.MergedDeleted-removedAbandonedCounts.MergedDeletedPKI)
+		fmt.Fprintln(os.Stdout, strings.Repeat("-", 70))
 	}
 
 	// Apply filters.
@@ -307,7 +352,7 @@ func main() {
 		fmt.Fprintln(os.Stdout)
 	}
 
-	if perFile {
+	if (perFile || len(methodGroupsPerFile) > 0) && len(inputFiles) > 1 {
 		bySource := make(map[string][]normalizer.Record, len(inputFiles))
 		for _, r := range normalized {
 			bySource[r.Source] = append(bySource[r.Source], r)
@@ -414,6 +459,9 @@ EXAMPLES:
   # Per-file since filters on multiple files
   vault-csv-normalizer -f jan.csv feb.csv --since-file jan.csv=2024-01-15 --since-file feb.csv=2024-02-01
 
+	# Remove abandoned clients (blank entity fields)
+	vault-csv-normalizer -f export.csv --remove-abandoned-clients
+
 CSV FORMAT (Vault activity export):
   Expected columns (order-independent, case-insensitive):
     client_id, namespace_id, namespace_path, mount_accessor, mount_path,
@@ -466,5 +514,27 @@ CSV FORMAT (Vault activity export):
             record and a JWT record for the same person are not collapsed
             (unless both groups are merged into one).
 
-      Can be combined with --dedup-alias, --dedup-jwt, and/or -d.`)
+      Can be combined with --dedup-alias, --dedup-jwt, and/or -d.
+
+  --dedup-methods-per-file <method1,method2,...>
+      Like --dedup-methods but deduplication is scoped to each input file
+      independently. Records in different files with the same normalized alias
+      are NOT collapsed against each other — only within-file duplicates are
+      removed. Useful when files represent different billing periods and you
+      want to count a returning user once per file rather than once globally.
+
+      Uses the same alias normalization and method-grouping syntax as
+      --dedup-methods (repeatable, comma-separated groups).
+
+        --dedup-methods-per-file ldap,oidc
+            Within each file, collapse LDAP and OIDC records that share the
+            same alias (exact match; tier suffixes like -t0/-t1 are distinct).
+            A user in jan.csv (LDAP) and feb.csv (OIDC) is NOT collapsed —
+            they appear once per file.
+
+        --dedup-methods-per-file ldap,oidc --dedup-methods-per-file jwt,saml
+            Two independent per-file groups. Same alias collapsing rules as
+            --dedup-methods but strictly within each source file.
+
+      Can be combined with --dedup-methods, --dedup-alias, --dedup-jwt, and/or -d.`)
 }

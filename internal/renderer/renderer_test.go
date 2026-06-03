@@ -46,8 +46,8 @@ func TestPrintTable_RendersRows(t *testing.T) {
 	if !strings.Contains(out, "Namespace Path") {
 		t.Error("expected header 'Namespace Path'")
 	}
-	if !strings.Contains(out, "Client Type") {
-		t.Error("expected header 'Client Type'")
+	if strings.Contains(out, "Client Type") {
+		t.Error("unexpected header 'Client Type' — removed from table output")
 	}
 
 	// Data rows present
@@ -56,9 +56,6 @@ func TestPrintTable_RendersRows(t *testing.T) {
 	}
 	if !strings.Contains(out, "education/") {
 		t.Error("expected namespace 'education/'")
-	}
-	if !strings.Contains(out, "non-entity") {
-		t.Error("expected client type 'non-entity'")
 	}
 }
 

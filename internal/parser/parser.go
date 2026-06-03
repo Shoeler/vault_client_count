@@ -17,23 +17,26 @@ type RawRecord struct {
 	// Source tracks which file this record came from.
 	Source string
 
-	ClientID             string
-	NamespaceID          string
-	NamespacePath        string
-	MountAccessor        string
-	MountPath            string
-	MountType            string
-	AuthMethod           string
-	ClientType           string
-	TokenCreationTime    string // may be populated from legacy "timestamp" column
-	ClientFirstUsageTime string
-	EntityAliasName      string
+	ClientID                    string
+	EntityName                  string
+	NamespaceID                 string
+	NamespacePath               string
+	MountAccessor               string
+	MountPath                   string
+	MountType                   string
+	AuthMethod                  string
+	ClientType                  string
+	TokenCreationTime           string // may be populated from legacy "timestamp" column
+	ClientFirstUsageTime        string
+	EntityAliasName             string
+	EntityAliasMetadataUsername string
 }
 
 // knownColumns maps all recognised (lowercased, trimmed) header variants to
 // a canonical field name used by the column mapper below.
 var knownColumns = map[string]string{
 	"client_id":              "client_id",
+	"entity_name":            "entity_name",
 	"namespace_id":           "namespace_id",
 	"namespace_path":         "namespace_path",
 	"mount_accessor":         "mount_accessor",
@@ -43,7 +46,8 @@ var knownColumns = map[string]string{
 	"client_type":            "client_type",
 	"token_creation_time":    "token_creation_time",
 	"client_first_usage_time": "client_first_usage_time",
-	"entity_alias_name":      "entity_alias_name",
+	"entity_alias_name":                  "entity_alias_name",
+	"entity_alias_metadata.username":     "entity_alias_metadata_username",
 	// Legacy / alternative column names:
 	"timestamp":              "token_creation_time", // Vault < 1.17
 	"first_seen":             "client_first_usage_time",
@@ -123,18 +127,20 @@ func parseReader(r io.Reader, source string) ([]RawRecord, error) {
 		}
 
 		records = append(records, RawRecord{
-			Source:               source,
-			ClientID:             clientID,
-			NamespaceID:          get(row, "namespace_id"),
-			NamespacePath:        get(row, "namespace_path"),
-			MountAccessor:        get(row, "mount_accessor"),
-			MountPath:            get(row, "mount_path"),
-			MountType:            get(row, "mount_type"),
-			AuthMethod:           get(row, "auth_method"),
-			ClientType:           get(row, "client_type"),
-			TokenCreationTime:    get(row, "token_creation_time"),
-			ClientFirstUsageTime: get(row, "client_first_usage_time"),
-			EntityAliasName:      get(row, "entity_alias_name"),
+			Source:                      source,
+			ClientID:                    clientID,
+			EntityName:                  get(row, "entity_name"),
+			NamespaceID:                 get(row, "namespace_id"),
+			NamespacePath:               get(row, "namespace_path"),
+			MountAccessor:               get(row, "mount_accessor"),
+			MountPath:                   get(row, "mount_path"),
+			MountType:                   get(row, "mount_type"),
+			AuthMethod:                  get(row, "auth_method"),
+			ClientType:                  get(row, "client_type"),
+			TokenCreationTime:           get(row, "token_creation_time"),
+			ClientFirstUsageTime:        get(row, "client_first_usage_time"),
+			EntityAliasName:             get(row, "entity_alias_name"),
+			EntityAliasMetadataUsername: get(row, "entity_alias_metadata_username"),
 		})
 	}
 
