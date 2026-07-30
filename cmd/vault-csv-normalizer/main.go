@@ -75,7 +75,7 @@ func main() {
 	flag.BoolVar(&debugMode, "debug", false, "Print all records grouped by mount path")
 	flag.BoolVar(&perFile, "per-file", false, "Print a summary for each input file before the combined summary")
 	flag.BoolVar(&showHelp, "help", false, "Show usage information")
-	flag.StringVar(&monthlyOutput, "monthly-output", "", "Write month-by-month client counts as a tab-separated file to this path (useful for trend forecasting)")
+	flag.StringVar(&monthlyOutput, "monthly-output", "", "Write month-by-month client counts as a tab-separated file to this path (useful for trend forecasting); with -p, splits each row into separate non-PKI and PKI cumulative columns")
 	flag.IntVar(&monthlyEntitlement, "monthly-entitlement", 0, "License entitlement count to include in each row of the monthly output (prompted interactively if not provided)")
 	flag.Parse()
 	inputFiles = append(inputFiles, flag.Args()...)
@@ -375,7 +375,11 @@ func main() {
 			fmt.Fprintf(os.Stderr, "error creating monthly output file: %v\n", err)
 			os.Exit(1)
 		}
-		renderer.WriteMonthlyTSV(f, normalized, monthlyEntitlement)
+		if countPKI {
+			renderer.WriteMonthlyTSVPartitioned(f, normalized, monthlyEntitlement)
+		} else {
+			renderer.WriteMonthlyTSV(f, normalized, monthlyEntitlement)
+		}
 		if err := f.Close(); err != nil {
 			fmt.Fprintf(os.Stderr, "error closing monthly output file: %v\n", err)
 			os.Exit(1)

@@ -29,15 +29,18 @@ func TestWriteMonthlyTSV_HeaderAndRows(t *testing.T) {
 	WriteMonthlyTSV(&buf, records, 500)
 	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
 
-	// No header — exactly 2 data rows.
-	if len(lines) != 2 {
-		t.Fatalf("expected 2 data rows (no header), got %d:\n%s", len(lines), buf.String())
+	// Header row + 2 data rows.
+	if len(lines) != 3 {
+		t.Fatalf("expected 1 header row + 2 data rows, got %d:\n%s", len(lines), buf.String())
+	}
+	if lines[0] != "date\tentitlement\tcumulative_total" {
+		t.Errorf("expected header row, got %q", lines[0])
 	}
 
 	// January row: date, entitlement, cumulative total=3.
-	jan := strings.Split(lines[0], "\t")
+	jan := strings.Split(lines[1], "\t")
 	if len(jan) != 3 {
-		t.Fatalf("expected 3 columns in January row, got %d: %q", len(jan), lines[0])
+		t.Fatalf("expected 3 columns in January row, got %d: %q", len(jan), lines[1])
 	}
 	if jan[0] != "2024-01-01" {
 		t.Errorf("expected date '2024-01-01', got %q", jan[0])
@@ -50,7 +53,7 @@ func TestWriteMonthlyTSV_HeaderAndRows(t *testing.T) {
 	}
 
 	// February row: cumulative total = 3+2 = 5.
-	feb := strings.Split(lines[1], "\t")
+	feb := strings.Split(lines[2], "\t")
 	if feb[0] != "2024-02-01" {
 		t.Errorf("expected date '2024-02-01', got %q", feb[0])
 	}
@@ -70,13 +73,13 @@ func TestWriteMonthlyTSV_RowsSortedChronologically(t *testing.T) {
 	WriteMonthlyTSV(&buf, records, 100)
 	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
 
-	if len(lines) != 3 {
-		t.Fatalf("expected 3 rows, got %d", len(lines))
+	if len(lines) != 4 {
+		t.Fatalf("expected 1 header row + 3 data rows, got %d", len(lines))
 	}
 	dates := []string{
-		strings.SplitN(lines[0], "\t", 2)[0],
 		strings.SplitN(lines[1], "\t", 2)[0],
 		strings.SplitN(lines[2], "\t", 2)[0],
+		strings.SplitN(lines[3], "\t", 2)[0],
 	}
 	if dates[0] != "2024-01-01" || dates[1] != "2024-02-01" || dates[2] != "2024-03-01" {
 		t.Errorf("expected chronological order, got: %v", dates)
@@ -94,9 +97,9 @@ func TestWriteMonthlyTSV_UnknownTimeBucket(t *testing.T) {
 	out := buf.String()
 	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
 
-	// Zero-time record is skipped; only one dated row.
-	if len(lines) != 1 {
-		t.Errorf("expected 1 row (zero-time record skipped), got %d:\n%s", len(lines), out)
+	// Zero-time record is skipped; header row + one dated row.
+	if len(lines) != 2 {
+		t.Errorf("expected 1 header row + 1 data row (zero-time record skipped), got %d:\n%s", len(lines), out)
 	}
 	if strings.Contains(out, "(unknown)") {
 		t.Errorf("expected no '(unknown)' row for zero-time records, got:\n%s", out)
@@ -113,7 +116,8 @@ func TestWriteMonthlyTSV_EntitlementColumn(t *testing.T) {
 	WriteMonthlyTSV(&buf, records, 1234)
 	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
 
-	for i, line := range lines {
+	// lines[0] is the header row; only data rows carry the entitlement column.
+	for i, line := range lines[1:] {
 		cols := strings.Split(line, "\t")
 		if len(cols) != 3 {
 			t.Fatalf("row %d: expected 3 columns, got %d: %q", i, len(cols), line)
@@ -139,16 +143,16 @@ func TestWriteMonthlyTSV_CountsAccurate(t *testing.T) {
 	WriteMonthlyTSV(&buf, records, 500)
 	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
 
-	if len(lines) != 2 {
-		t.Fatalf("expected 2 rows, got %d", len(lines))
+	if len(lines) != 3 {
+		t.Fatalf("expected 1 header row + 2 data rows, got %d", len(lines))
 	}
 
-	janCols := strings.Split(lines[0], "\t")
+	janCols := strings.Split(lines[1], "\t")
 	if janCols[2] != "4" {
 		t.Errorf("expected January cumulative total=4, got %q", janCols[2])
 	}
 
-	febCols := strings.Split(lines[1], "\t")
+	febCols := strings.Split(lines[2], "\t")
 	if febCols[2] != "5" {
 		t.Errorf("expected February cumulative total=5 (4+1), got %q", febCols[2])
 	}
@@ -157,7 +161,90 @@ func TestWriteMonthlyTSV_CountsAccurate(t *testing.T) {
 func TestWriteMonthlyTSV_EmptyInput(t *testing.T) {
 	var buf strings.Builder
 	WriteMonthlyTSV(&buf, nil, 500)
-	if buf.Len() != 0 {
-		t.Errorf("expected no output for empty input, got: %q", buf.String())
+	got := strings.TrimRight(buf.String(), "\n")
+	if got != "date\tentitlement\tcumulative_total" {
+		t.Errorf("expected header-only output for empty input, got: %q", buf.String())
+	}
+}
+
+func TestWriteMonthlyTSVPartitioned_SplitsPKIAndNonPKI(t *testing.T) {
+	jan := mustMonth("2024-01")
+	feb := mustMonth("2024-02")
+	records := []normalizer.Record{
+		{ClientType: "entity", TokenCreationTime: jan},
+		{ClientType: "entity", TokenCreationTime: jan},
+		{ClientType: "acme", TokenCreationTime: jan},
+		{ClientType: "entity", TokenCreationTime: feb},
+		{ClientType: "acme", TokenCreationTime: feb},
+		{MountAccessor: "auth_cert_1234", TokenCreationTime: feb},
+	}
+
+	var buf strings.Builder
+	WriteMonthlyTSVPartitioned(&buf, records, 500)
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+
+	if len(lines) != 3 {
+		t.Fatalf("expected 1 header row + 2 data rows, got %d:\n%s", len(lines), buf.String())
+	}
+	if lines[0] != "date\tentitlement\tnon_pki_cumulative_total\tpki_cumulative_total" {
+		t.Errorf("expected header row, got %q", lines[0])
+	}
+
+	janCols := strings.Split(lines[1], "\t")
+	if len(janCols) != 4 {
+		t.Fatalf("expected 4 columns in January row, got %d: %q", len(janCols), lines[1])
+	}
+	if janCols[0] != "2024-01-01" {
+		t.Errorf("expected date '2024-01-01', got %q", janCols[0])
+	}
+	if janCols[1] != "500" {
+		t.Errorf("expected entitlement '500', got %q", janCols[1])
+	}
+	if janCols[2] != "2" {
+		t.Errorf("expected January non-PKI cumulative '2', got %q", janCols[2])
+	}
+	if janCols[3] != "1" {
+		t.Errorf("expected January PKI cumulative '1', got %q", janCols[3])
+	}
+
+	febCols := strings.Split(lines[2], "\t")
+	if febCols[2] != "3" {
+		t.Errorf("expected February non-PKI cumulative '3' (2+1), got %q", febCols[2])
+	}
+	if febCols[3] != "3" {
+		t.Errorf("expected February PKI cumulative '3' (1+2), got %q", febCols[3])
+	}
+}
+
+func TestWriteMonthlyTSVPartitioned_MonthWithOnlyPKI(t *testing.T) {
+	jan := mustMonth("2024-01")
+	feb := mustMonth("2024-02")
+	records := []normalizer.Record{
+		{ClientType: "entity", TokenCreationTime: jan},
+		{ClientType: "acme", TokenCreationTime: feb},
+	}
+
+	var buf strings.Builder
+	WriteMonthlyTSVPartitioned(&buf, records, 0)
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("expected 1 header row + 2 data rows, got %d:\n%s", len(lines), buf.String())
+	}
+
+	febCols := strings.Split(lines[2], "\t")
+	if febCols[2] != "1" {
+		t.Errorf("expected February non-PKI cumulative to carry forward as '1', got %q", febCols[2])
+	}
+	if febCols[3] != "1" {
+		t.Errorf("expected February PKI cumulative '1', got %q", febCols[3])
+	}
+}
+
+func TestWriteMonthlyTSVPartitioned_EmptyInput(t *testing.T) {
+	var buf strings.Builder
+	WriteMonthlyTSVPartitioned(&buf, nil, 500)
+	got := strings.TrimRight(buf.String(), "\n")
+	if got != "date\tentitlement\tnon_pki_cumulative_total\tpki_cumulative_total" {
+		t.Errorf("expected header-only output for empty input, got: %q", buf.String())
 	}
 }
