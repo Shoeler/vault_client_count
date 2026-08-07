@@ -55,6 +55,9 @@ func main() {
 	var debugMode bool
 	var perFile bool
 	var showHelp bool
+	var monthlyOutput string
+	var monthlyEntitlement int
+	var monthlySoko bool
 
 	flag.Var(&inputFiles, "f", "One or more Vault client export CSV files. May be specified multiple times or followed by multiple paths.")
 	flag.StringVar(&sortBy, "sort", "namespace_path", "Column to sort by: namespace_path, client_type, token_creation_time, client_first_usage_time, mount_accessor")
@@ -73,6 +76,9 @@ func main() {
 	flag.BoolVar(&debugMode, "debug", false, "Print all records grouped by mount path")
 	flag.BoolVar(&perFile, "per-file", false, "Print a summary for each input file before the combined summary")
 	flag.BoolVar(&showHelp, "help", false, "Show usage information")
+	flag.StringVar(&monthlyOutput, "monthly-output", "", "Write month-by-month client counts as a tab-separated file to this path (useful for trend forecasting); with -p, splits each row into separate non-PKI and PKI cumulative columns")
+	flag.IntVar(&monthlyEntitlement, "monthly-entitlement", 0, "License entitlement count to include in each row of the monthly output (prompted interactively if not provided)")
+	flag.BoolVar(&monthlySoko, "soko", false, "With -monthly-output, write a headerless three-column file (end-of-month date, entitlement, total clients); with -p, PKI clients are divided by 40, rounded, and folded into the total")
 	flag.Parse()
 	inputFiles = append(inputFiles, flag.Args()...)
 
@@ -350,6 +356,40 @@ func main() {
 			}
 		}
 		fmt.Fprintln(os.Stdout)
+	}
+
+	if monthlyOutput != "" {
+		entitlementProvided := false
+		flag.Visit(func(f *flag.Flag) {
+			if f.Name == "monthly-entitlement" {
+				entitlementProvided = true
+			}
+		})
+		if !entitlementProvided {
+			fmt.Fprint(os.Stderr, "Enter entitlement value: ")
+			if _, err := fmt.Scan(&monthlyEntitlement); err != nil {
+				fmt.Fprintf(os.Stderr, "error reading entitlement: %v\n", err)
+				os.Exit(1)
+			}
+		}
+		f, err := os.Create(monthlyOutput)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error creating monthly output file: %v\n", err)
+			os.Exit(1)
+		}
+		switch {
+		case monthlySoko:
+			renderer.WriteMonthlyTSVSoko(f, normalized, monthlyEntitlement, countPKI)
+		case countPKI:
+			renderer.WriteMonthlyTSVPartitioned(f, normalized, monthlyEntitlement)
+		default:
+			renderer.WriteMonthlyTSV(f, normalized, monthlyEntitlement)
+		}
+		if err := f.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "error closing monthly output file: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Fprintf(os.Stdout, "Monthly counts written to %s\n", monthlyOutput)
 	}
 
 	if (perFile || len(methodGroupsPerFile) > 0) && len(inputFiles) > 1 {
