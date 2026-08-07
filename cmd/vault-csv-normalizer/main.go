@@ -57,6 +57,7 @@ func main() {
 	var showHelp bool
 	var monthlyOutput string
 	var monthlyEntitlement int
+	var monthlySoko bool
 
 	flag.Var(&inputFiles, "f", "One or more Vault client export CSV files. May be specified multiple times or followed by multiple paths.")
 	flag.StringVar(&sortBy, "sort", "namespace_path", "Column to sort by: namespace_path, client_type, token_creation_time, client_first_usage_time, mount_accessor")
@@ -77,6 +78,7 @@ func main() {
 	flag.BoolVar(&showHelp, "help", false, "Show usage information")
 	flag.StringVar(&monthlyOutput, "monthly-output", "", "Write month-by-month client counts as a tab-separated file to this path (useful for trend forecasting); with -p, splits each row into separate non-PKI and PKI cumulative columns")
 	flag.IntVar(&monthlyEntitlement, "monthly-entitlement", 0, "License entitlement count to include in each row of the monthly output (prompted interactively if not provided)")
+	flag.BoolVar(&monthlySoko, "soko", false, "With -monthly-output, write a headerless three-column file (end-of-month date, entitlement, total clients); with -p, PKI clients are divided by 40, rounded, and folded into the total")
 	flag.Parse()
 	inputFiles = append(inputFiles, flag.Args()...)
 
@@ -375,9 +377,12 @@ func main() {
 			fmt.Fprintf(os.Stderr, "error creating monthly output file: %v\n", err)
 			os.Exit(1)
 		}
-		if countPKI {
+		switch {
+		case monthlySoko:
+			renderer.WriteMonthlyTSVSoko(f, normalized, monthlyEntitlement, countPKI)
+		case countPKI:
 			renderer.WriteMonthlyTSVPartitioned(f, normalized, monthlyEntitlement)
-		} else {
+		default:
 			renderer.WriteMonthlyTSV(f, normalized, monthlyEntitlement)
 		}
 		if err := f.Close(); err != nil {

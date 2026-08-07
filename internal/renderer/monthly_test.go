@@ -248,3 +248,104 @@ func TestWriteMonthlyTSVPartitioned_EmptyInput(t *testing.T) {
 		t.Errorf("expected header-only output for empty input, got: %q", buf.String())
 	}
 }
+
+func TestWriteMonthlyTSVSoko_NoHeaderThreeColumnsEndOfMonth(t *testing.T) {
+	records := []normalizer.Record{
+		{ClientType: "entity", TokenCreationTime: mustMonth("2024-01")},
+		{ClientType: "entity", TokenCreationTime: mustMonth("2024-01")},
+		{ClientType: "non-entity", TokenCreationTime: mustMonth("2024-01")},
+		{ClientType: "entity", TokenCreationTime: mustMonth("2024-02")},
+		{ClientType: "acme", TokenCreationTime: mustMonth("2024-02")},
+	}
+
+	var buf strings.Builder
+	WriteMonthlyTSVSoko(&buf, records, 500, false)
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+
+	// No header — exactly 2 data rows.
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 data rows (no header), got %d:\n%s", len(lines), buf.String())
+	}
+
+	jan := strings.Split(lines[0], "\t")
+	if len(jan) != 3 {
+		t.Fatalf("expected 3 columns in January row, got %d: %q", len(jan), lines[0])
+	}
+	if jan[0] != "2024-01-31" {
+		t.Errorf("expected end-of-month date '2024-01-31', got %q", jan[0])
+	}
+	if jan[1] != "500" {
+		t.Errorf("expected entitlement '500', got %q", jan[1])
+	}
+	if jan[2] != "3" {
+		t.Errorf("expected total '3' for January, got %q", jan[2])
+	}
+
+	// 2024 is a leap year — February has 29 days.
+	feb := strings.Split(lines[1], "\t")
+	if feb[0] != "2024-02-29" {
+		t.Errorf("expected end-of-month date '2024-02-29', got %q", feb[0])
+	}
+	if feb[2] != "5" {
+		t.Errorf("expected total '5' for February (acme counted plainly since -p not set), got %q", feb[2])
+	}
+}
+
+func TestWriteMonthlyTSVSoko_DecemberRollsToNextYear(t *testing.T) {
+	records := []normalizer.Record{
+		{ClientType: "entity", TokenCreationTime: mustMonth("2024-12")},
+	}
+
+	var buf strings.Builder
+	WriteMonthlyTSVSoko(&buf, records, 0, false)
+	line := strings.TrimRight(buf.String(), "\n")
+	cols := strings.Split(line, "\t")
+	if cols[0] != "2024-12-31" {
+		t.Errorf("expected end-of-month date '2024-12-31', got %q", cols[0])
+	}
+}
+
+func TestWriteMonthlyTSVSoko_CountPKIDividesBy40AndRounds(t *testing.T) {
+	jan := mustMonth("2024-01")
+	feb := mustMonth("2024-02")
+	records := []normalizer.Record{}
+	// January: 2 non-PKI, 20 PKI (acme). 20/40 = 0.5 → rounds to 1. Total = 3.
+	for i := 0; i < 2; i++ {
+		records = append(records, normalizer.Record{ClientType: "entity", TokenCreationTime: jan})
+	}
+	for i := 0; i < 20; i++ {
+		records = append(records, normalizer.Record{ClientType: "acme", TokenCreationTime: jan})
+	}
+	// February: +3 non-PKI (cumulative 5), +20 PKI (cumulative 40). 40/40 = 1.0 exact. Total = 6.
+	for i := 0; i < 3; i++ {
+		records = append(records, normalizer.Record{ClientType: "entity", TokenCreationTime: feb})
+	}
+	for i := 0; i < 20; i++ {
+		records = append(records, normalizer.Record{ClientType: "acme", TokenCreationTime: feb})
+	}
+
+	var buf strings.Builder
+	WriteMonthlyTSVSoko(&buf, records, 500, true)
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 rows, got %d:\n%s", len(lines), buf.String())
+	}
+
+	janCols := strings.Split(lines[0], "\t")
+	if janCols[2] != "3" {
+		t.Errorf("expected January total '3' (2 non-PKI + round(20/40)=1), got %q", janCols[2])
+	}
+
+	febCols := strings.Split(lines[1], "\t")
+	if febCols[2] != "6" {
+		t.Errorf("expected February total '6' (5 non-PKI + round(40/40)=1), got %q", febCols[2])
+	}
+}
+
+func TestWriteMonthlyTSVSoko_EmptyInput(t *testing.T) {
+	var buf strings.Builder
+	WriteMonthlyTSVSoko(&buf, nil, 500, true)
+	if buf.Len() != 0 {
+		t.Errorf("expected no output for empty input, got: %q", buf.String())
+	}
+}
