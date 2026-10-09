@@ -23,3 +23,10 @@ vendor/
 # OS
 .DS_Store
 Thumbs.db
+
+# Real customer exports — never commit
+testdata/real/
+
+# Python
+__pycache__/
+*.pyc

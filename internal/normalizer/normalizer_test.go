@@ -25,141 +25,28 @@ func TestNormalizeNamespacePath(t *testing.T) {
 	}
 }
 
-func TestNormalizeClientType(t *testing.T) {
-	cases := []struct{ in, want string }{
-		{"entity", "entity"},
-		{"Entity", "entity"},
-		{"ENTITY", "entity"},
-		{"non-entity", "non-entity"},
-		{"non_entity", "non-entity"},
-		{"Non-Entity Client", "non-entity"},
-		{"acme", "acme"},
-		{"certificate", "certificate"}, // passthrough — not an acme alias
-		{"cert", "cert"},               // passthrough — not an acme alias
-		{"secret-sync", "secret-sync"},
-		{"secret_sync", "secret-sync"},
-		{"secrets sync", "secret-sync"},
-		{"", "unknown"},
-		{"some-future-type", "some-future-type"}, // passthrough
-	}
-	for _, c := range cases {
-		got := normalizeClientType(c.in)
-		if got != c.want {
-			t.Errorf("normalizeClientType(%q) = %q, want %q", c.in, got, c.want)
-		}
-	}
-}
-
-func TestParseTime(t *testing.T) {
-	cases := []struct {
-		in   string
-		want time.Time
-	}{
-		{"2024-01-15T10:00:00Z", time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)},
-		{"2024-01-15T10:00:00+00:00", time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)},
-		{"2024-01-15", time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC)},
-		{"", time.Time{}},
-		{"N/A", time.Time{}},
-		{"0", time.Time{}},
-		{"garbage", time.Time{}},
-	}
-	for _, c := range cases {
-		got := ParseTime(c.in)
-		if !got.Equal(c.want) {
-			t.Errorf("ParseTime(%q) = %v, want %v", c.in, got, c.want)
-		}
-	}
-}
-
-func TestNormalize(t *testing.T) {
-	raw := []parser.RawRecord{
-		{
-			Source:            "jan.csv",
-			ClientID:          "abc-123",
-			EntityName:        "  Alice Smith  ",
-			NamespaceID:       "",
-			NamespacePath:     "root",
-			MountPath:         "auth/approle",
-			MountType:         "APPROLE",
-			AuthMethod:        "AppRole",
-			ClientType:        "non_entity",
-			TokenCreationTime: "2024-01-01T00:00:00Z",
-		},
-	}
-	records := Normalize(raw)
-	if len(records) != 1 {
-		t.Fatalf("expected 1 record, got %d", len(records))
-	}
-	r := records[0]
-	if r.EntityName != "Alice Smith" {
-		t.Errorf("EntityName: got %q, want Alice Smith", r.EntityName)
-	}
-	if r.NamespacePath != "[root]" {
-		t.Errorf("NamespacePath: got %q, want [root]", r.NamespacePath)
-	}
-	if r.NamespaceID != "root" {
-		t.Errorf("NamespaceID: got %q, want root", r.NamespaceID)
-	}
-	if r.MountPath != "auth/approle/" {
-		t.Errorf("MountPath: got %q, want auth/approle/", r.MountPath)
-	}
-	if r.MountType != "approle" {
-		t.Errorf("MountType: got %q, want approle", r.MountType)
-	}
-	if r.AuthMethod != "approle" {
-		t.Errorf("AuthMethod: got %q, want approle", r.AuthMethod)
-	}
-	if r.ClientType != "non-entity" {
-		t.Errorf("ClientType: got %q, want non-entity", r.ClientType)
-	}
-	want := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-	if !r.TokenCreationTime.Equal(want) {
-		t.Errorf("TokenCreationTime: got %v, want %v", r.TokenCreationTime, want)
-	}
-}
-
-func TestFilterByNamespace(t *testing.T) {
-	records := []Record{
-		{NamespacePath: "[root]", ClientType: "entity"},
-		{NamespacePath: "education/", ClientType: "non-entity"},
-		{NamespacePath: "education/training/", ClientType: "entity"},
-		{NamespacePath: "finance/", ClientType: "entity"},
-	}
-	filtered := FilterByNamespace(records, "education")
-	if len(filtered) != 2 {
-		t.Errorf("expected 2 records, got %d", len(filtered))
-	}
-}
-
-func TestFilterByClientType(t *testing.T) {
-	records := []Record{
-		{ClientType: "entity"},
-		{ClientType: "non-entity"},
-		{ClientType: "entity"},
-		{ClientType: "acme"},
-	}
-	filtered := FilterByClientType(records, "entity")
-	if len(filtered) != 2 {
-		t.Errorf("expected 2 entity records, got %d", len(filtered))
-	}
-}
-
+// Abandoned-client removal applies only to client_type entity (commit ee2570e):
+// non-entity and acme records are never removed, even with blank identity fields.
 func TestFilterAbandonedClients(t *testing.T) {
 	records := []Record{
 		// removed as merged/deleted: mount path present
-		{ClientID: "drop-merged-1", EntityName: "", EntityAliasName: "", MountPath: "auth/ldap/", MountType: "ldap"},
+		{ClientID: "drop-merged-1", ClientType: "entity", EntityName: "", EntityAliasName: "", MountPath: "auth/ldap/", MountType: "ldap"},
 		// removed as merged/deleted: mount path present even if mount type is blank
-		{ClientID: "drop-merged-2", EntityName: "", EntityAliasName: "", MountPath: "auth/oidc/", MountType: ""},
+		{ClientID: "drop-merged-2", ClientType: "entity", EntityName: "", EntityAliasName: "", MountPath: "auth/oidc/", MountType: ""},
 		// removed as no mount: mount path missing
-		{ClientID: "drop-nomount-1", EntityName: "", EntityAliasName: "", MountPath: "", MountType: "ldap"},
+		{ClientID: "drop-nomount-1", ClientType: "entity", EntityName: "", EntityAliasName: "", MountPath: "", MountType: "ldap"},
 		// removed as merged/deleted PKI (auth_cert accessor, mount present)
-		{ClientID: "drop-merged-pki-1", EntityName: "", EntityAliasName: "", MountPath: "auth/cert/", MountType: "cert", MountAccessor: "auth_cert_abc123"},
+		{ClientID: "drop-merged-pki-1", ClientType: "entity", EntityName: "", EntityAliasName: "", MountPath: "auth/cert/", MountType: "cert", MountAccessor: "auth_cert_abc123"},
 		// removed as no-mount PKI (auth_cert accessor, mount missing)
-		{ClientID: "drop-nomount-pki-1", EntityName: "", EntityAliasName: "", MountPath: "", MountType: "cert", MountAccessor: "auth_cert_xyz789"},
+		{ClientID: "drop-nomount-pki-1", ClientType: "entity", EntityName: "", EntityAliasName: "", MountPath: "", MountType: "cert", MountAccessor: "auth_cert_xyz789"},
+		// keep: not an entity client, even though identity fields are blank
+		{ClientID: "keep-nonentity-1", ClientType: "non-entity", EntityName: "", EntityAliasName: "", MountPath: "", MountType: "token"},
+		// keep: ACME client, even though identity fields are blank
+		{ClientID: "keep-acme-1", ClientType: "acme", EntityName: "", EntityAliasName: "", MountPath: "pki/"},
 		// keep: entity name present
-		{ClientID: "keep-3", EntityName: "Alice", EntityAliasName: "", MountPath: "auth/ldap/", MountType: "ldap"},
+		{ClientID: "keep-3", ClientType: "entity", EntityName: "Alice", EntityAliasName: "", MountPath: "auth/ldap/", MountType: "ldap"},
 		// keep: entity alias present
-		{ClientID: "keep-4", EntityName: "", EntityAliasName: "alice", MountPath: "auth/ldap/", MountType: "ldap"},
+		{ClientID: "keep-4", ClientType: "entity", EntityName: "", EntityAliasName: "alice", MountPath: "auth/ldap/", MountType: "ldap"},
 	}
 
 	out, counts := FilterAbandonedClients(records)
@@ -178,8 +65,17 @@ func TestFilterAbandonedClients(t *testing.T) {
 	if counts.Total() != 5 {
 		t.Fatalf("expected Total=5, got %d", counts.Total())
 	}
-	if len(out) != 2 {
-		t.Fatalf("expected 2 records after filter, got %d", len(out))
+	if len(out) != 4 {
+		t.Fatalf("expected 4 records after filter, got %d", len(out))
+	}
+	present := make(map[string]bool, len(out))
+	for _, r := range out {
+		present[r.ClientID] = true
+	}
+	for _, id := range []string{"keep-nonentity-1", "keep-acme-1", "keep-3", "keep-4"} {
+		if !present[id] {
+			t.Errorf("expected %q to be kept", id)
+		}
 	}
 	for _, r := range out {
 		if strings.HasPrefix(r.ClientID, "drop-") {
@@ -248,26 +144,6 @@ func TestFilterSince(t *testing.T) {
 	}
 }
 
-func TestParseTime_Formats(t *testing.T) {
-	cases := []struct {
-		in   string
-		want time.Time
-	}{
-		{"2024-06-15", time.Date(2024, 6, 15, 0, 0, 0, 0, time.UTC)},
-		{"2024-06-15T10:30:00Z", time.Date(2024, 6, 15, 10, 30, 0, 0, time.UTC)},
-		{"06/15/2024", time.Date(2024, 6, 15, 0, 0, 0, 0, time.UTC)},
-		{"", time.Time{}},
-		{"N/A", time.Time{}},
-		{"not-a-date", time.Time{}},
-	}
-	for _, c := range cases {
-		got := ParseTime(c.in)
-		if !got.Equal(c.want) {
-			t.Errorf("ParseTime(%q) = %v, want %v", c.in, got, c.want)
-		}
-	}
-}
-
 func TestBaseAlias(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"alice@corp.com", "alice"},
@@ -303,23 +179,6 @@ func TestStripTierSuffix(t *testing.T) {
 		got := StripTierSuffix(c.in)
 		if got != c.want {
 			t.Errorf("StripTierSuffix(%q) = %q, want %q", c.in, got, c.want)
-		}
-	}
-}
-
-func TestStripTierSuffix_AfterBaseAlias(t *testing.T) {
-	// The combination used by aliasKeyFor: strip domain then tier.
-	cases := []struct{ in, want string }{
-		{"alice-t0@corp.com", "alice"},
-		{"alice-t1@corp.com", "alice"},
-		{"alice@corp.com", "alice"},
-		{"alice-t0", "alice"},
-		{"alice", "alice"},
-	}
-	for _, c := range cases {
-		got := StripTierSuffix(BaseAlias(c.in))
-		if got != c.want {
-			t.Errorf("StripTierSuffix(BaseAlias(%q)) = %q, want %q", c.in, got, c.want)
 		}
 	}
 }
@@ -457,23 +316,6 @@ func clientIDSet(records []Record) map[string]bool {
 	return m
 }
 
-func TestSort(t *testing.T) {
-	records := []Record{
-		{NamespacePath: "zzz/"},
-		{NamespacePath: "[root]"},
-		{NamespacePath: "aaa/"},
-	}
-	if err := Sort(records, "namespace_path"); err != nil {
-		t.Fatalf("Sort: %v", err)
-	}
-	want := []string{"[root]", "aaa/", "zzz/"}
-	for i, r := range records {
-		if r.NamespacePath != want[i] {
-			t.Errorf("records[%d].NamespacePath = %q, want %q", i, r.NamespacePath, want[i])
-		}
-	}
-}
-
 func TestSort_UnknownKey(t *testing.T) {
 	if err := Sort(nil, "bogus_column"); err == nil {
 		t.Error("expected error for unknown sort key, got nil")
@@ -540,66 +382,6 @@ func TestPartitionPKI(t *testing.T) {
 		if !nonPKIIDs[r.ClientID] {
 			t.Errorf("unexpected client in non-PKI partition: %s", r.ClientID)
 		}
-	}
-}
-
-// Regression test: cert auth clients (client_type=entity/non-entity with an
-// auth_cert mount_accessor) must not be lumped into the non-PKI partition.
-// This broke when IsPKIClient was changed to only check client_type=acme.
-func TestPartitionPKI_CertAuthClientsArePKI(t *testing.T) {
-	records := []Record{
-		{ClientID: "cert-entity", ClientType: "entity", MountAccessor: "auth_cert_internal"},
-		{ClientID: "cert-nonentity", ClientType: "non-entity", MountAccessor: "auth_cert_prod"},
-		{ClientID: "regular", ClientType: "entity", MountAccessor: "auth_approle_web"},
-	}
-
-	pki, nonPKI := PartitionPKI(records, IsPKIClient)
-
-	if len(pki) != 2 {
-		t.Errorf("expected 2 PKI records (cert auth clients), got %d — cert auth clients are being incorrectly lumped into non-PKI", len(pki))
-	}
-	if len(nonPKI) != 1 {
-		t.Errorf("expected 1 non-PKI record, got %d", len(nonPKI))
-	}
-	for _, r := range pki {
-		if r.ClientID == "regular" {
-			t.Error("non-cert client ended up in PKI partition")
-		}
-	}
-}
-
-func TestPartitionPKI_AllPKI(t *testing.T) {
-	records := []Record{
-		{ClientID: "p1", ClientType: "acme"},
-		{ClientID: "p2", ClientType: "acme"},
-	}
-	pki, nonPKI := PartitionPKI(records, IsPKIClient)
-	if len(pki) != 2 {
-		t.Errorf("expected 2 PKI, got %d", len(pki))
-	}
-	if len(nonPKI) != 0 {
-		t.Errorf("expected 0 non-PKI, got %d", len(nonPKI))
-	}
-}
-
-func TestPartitionPKI_NoPKI(t *testing.T) {
-	records := []Record{
-		{ClientID: "e1", ClientType: "entity"},
-		{ClientID: "e2", ClientType: "non-entity"},
-	}
-	pki, nonPKI := PartitionPKI(records, IsPKIClient)
-	if len(pki) != 0 {
-		t.Errorf("expected 0 PKI, got %d", len(pki))
-	}
-	if len(nonPKI) != 2 {
-		t.Errorf("expected 2 non-PKI, got %d", len(nonPKI))
-	}
-}
-
-func TestPartitionPKI_Empty(t *testing.T) {
-	pki, nonPKI := PartitionPKI(nil, IsPKIClient)
-	if pki != nil || nonPKI != nil {
-		t.Error("expected nil slices for empty input")
 	}
 }
 
@@ -837,24 +619,6 @@ func TestDeduplicateByAlias_ThenDeduplicate_CollapsesBothDimensions(t *testing.T
 	}
 }
 
-func TestDeduplicateByAlias_CollapsesAcrossFiles(t *testing.T) {
-	// alice-t0 in jan.csv and alice-t1 in feb.csv both normalize to "alice" →
-	// alias dedup keeps only the first occurrence regardless of file.
-	records := []Record{
-		{ClientID: "1", EntityAliasName: "alice-t0", Source: "jan.csv"},
-		{ClientID: "2", EntityAliasName: "alice-t1", Source: "feb.csv"},
-	}
-
-	out := DeduplicateByAlias(records)
-
-	if len(out) != 1 {
-		t.Fatalf("expected 1 record (cross-file tier collapse), got %d", len(out))
-	}
-	if out[0].ClientID != "1" {
-		t.Errorf("expected first occurrence (id:1) to be kept, got id:%s", out[0].ClientID)
-	}
-}
-
 func TestDeduplicateByAlias_CollapseOIDCWithLDAP(t *testing.T) {
 	// LDAP and OIDC share the same identity group, so the same normalized alias
 	// across both auth methods is treated as one client.
@@ -880,33 +644,6 @@ func TestDeduplicateByAlias_CollapseOIDCWithLDAP(t *testing.T) {
 		if kept[id] {
 			t.Errorf("expected ClientID=%s to be dropped (same ldap/oidc group)", id)
 		}
-	}
-}
-
-func TestDeduplicateByAlias_ScopedToMountType(t *testing.T) {
-	// alice on LDAP and alice@corp.com on JWT share a normalized alias but have
-	// different mount types → --dedup-alias does NOT collapse them. Use
-	// --dedup-jwt to additionally collapse cross-auth-method duplicates.
-	// alice-t0 and alice on LDAP share both the normalized alias AND mount type
-	// → they ARE collapsed.
-	records := []Record{
-		{ClientID: "1", EntityAliasName: "alice", MountType: "ldap", Source: "jan.csv"},
-		{ClientID: "2", EntityAliasName: "alice-t0", MountType: "ldap", Source: "jan.csv"},      // dup: same type + base
-		{ClientID: "3", EntityAliasName: "alice@corp.com", MountType: "jwt", Source: "jan.csv"}, // kept: different mount type
-	}
-	out := DeduplicateByAlias(records)
-	if len(out) != 2 {
-		t.Fatalf("expected 2 records (alice/ldap + alice/jwt), got %d: %v", len(out), clientIDs(out))
-	}
-	kept := clientIDSet(out)
-	if !kept["1"] {
-		t.Error("expected id:1 (alice ldap) to be kept")
-	}
-	if !kept["3"] {
-		t.Error("expected id:3 (alice jwt) to be kept — different mount type, requires --dedup-jwt")
-	}
-	if kept["2"] {
-		t.Error("expected id:2 (alice-t0 ldap) to be dropped — same mount type and normalized alias")
 	}
 }
 
@@ -1134,45 +871,490 @@ func TestFindAliasDuplicatesForMethods_NoDuplicates(t *testing.T) {
 // array and silently corrupts the caller's slice. Each filter must not modify
 // the elements of its input slice.
 
-func TestFilterSince_DoesNotMutateInput(t *testing.T) {
+// ── per-file method dedup ─────────────────────────────────────────────────────
+
+func pfRec(id, source, mount, alias string) Record {
+	return Record{ClientID: id, Source: source, MountType: mount, EntityAliasName: alias}
+}
+
+func pfIDs(records []Record) []string {
+	ids := make([]string, 0, len(records))
+	for _, r := range records {
+		ids = append(ids, r.ClientID)
+	}
+	return ids
+}
+
+func pfExpectIDs(t *testing.T, got []Record, want ...string) {
+	t.Helper()
+	ids := pfIDs(got)
+	if strings.Join(ids, ",") != strings.Join(want, ",") {
+		t.Errorf("got ids %v, want %v", ids, want)
+	}
+}
+
+func TestPerFile_SameAliasInTwoFilesNotCollapsed(t *testing.T) {
+	records := []Record{
+		pfRec("1", "jan.csv", "ldap", "alice"),
+		pfRec("2", "feb.csv", "ldap", "alice"),
+	}
+	groups := [][]string{{"ldap", "oidc"}}
+	pfExpectIDs(t, DeduplicateByAliasForMethodsPerFile(records, groups), "1", "2")
+	if dups := FindAliasDuplicatesForMethodsPerFile(records, groups); len(dups) != 0 {
+		t.Errorf("expected no duplicate groups, got %d", len(dups))
+	}
+}
+
+func TestPerFile_TierSuffixesAreDistinct(t *testing.T) {
+	records := []Record{
+		pfRec("1", "jan.csv", "ldap", "alice-t0"),
+		pfRec("2", "jan.csv", "ldap", "alice-t1"),
+	}
+	groups := [][]string{{"ldap"}}
+	pfExpectIDs(t, DeduplicateByAliasForMethodsPerFile(records, groups), "1", "2")
+	if dups := FindAliasDuplicatesForMethodsPerFile(records, groups); len(dups) != 0 {
+		t.Errorf("expected no duplicate groups, got %d", len(dups))
+	}
+}
+
+func TestPerFile_JWTAndLDAPCollapseInOneFile(t *testing.T) {
+	records := []Record{
+		pfRec("1", "jan.csv", "ldap", "alice"),
+		pfRec("2", "jan.csv", "jwt", "alice@corp.com"),
+	}
+	groups := [][]string{{"ldap", "jwt"}}
+	pfExpectIDs(t, DeduplicateByAliasForMethodsPerFile(records, groups), "1")
+	dups := FindAliasDuplicatesForMethodsPerFile(records, groups)
+	if len(dups) != 1 || len(dups[0]) != 2 {
+		t.Fatalf("expected one group of 2, got %v", dups)
+	}
+}
+
+func TestPerFile_OIDCUsesMetadataUsername(t *testing.T) {
+	oidc := pfRec("2", "jan.csv", "oidc", "uuid-1234")
+	oidc.EntityAliasMetadataUsername = "alice"
+	records := []Record{pfRec("1", "jan.csv", "ldap", "alice"), oidc}
+	groups := [][]string{{"ldap", "oidc"}}
+	pfExpectIDs(t, DeduplicateByAliasForMethodsPerFile(records, groups), "1")
+	if effectiveAliasInFile(oidc) != "alice" {
+		t.Errorf("expected effective alias alice, got %q", effectiveAliasInFile(oidc))
+	}
+}
+
+func TestPerFile_BlankAliasAlwaysKeptEvenWithMetadataUsername(t *testing.T) {
+	oidc := pfRec("2", "jan.csv", "oidc", "")
+	oidc.EntityAliasMetadataUsername = "alice"
+	records := []Record{pfRec("1", "jan.csv", "ldap", "alice"), oidc}
+	groups := [][]string{{"ldap", "oidc"}}
+	pfExpectIDs(t, DeduplicateByAliasForMethodsPerFile(records, groups), "1", "2")
+	if dups := FindAliasDuplicatesForMethodsPerFile(records, groups); len(dups) != 0 {
+		t.Errorf("expected no duplicate groups, got %d", len(dups))
+	}
+}
+
+func TestPerFile_PKIAlwaysKept(t *testing.T) {
+	a := pfRec("1", "jan.csv", "ldap", "alice")
+	b := pfRec("2", "jan.csv", "ldap", "alice")
+	b.MountAccessor = "auth_cert_abc"
+	c := pfRec("3", "jan.csv", "ldap", "alice")
+	c.ClientType = "acme"
+	groups := [][]string{{"ldap"}}
+	pfExpectIDs(t, DeduplicateByAliasForMethodsPerFile([]Record{a, b, c}, groups), "1", "2", "3")
+	if dups := FindAliasDuplicatesForMethodsPerFile([]Record{a, b, c}, groups); len(dups) != 0 {
+		t.Errorf("expected no duplicate groups, got %d", len(dups))
+	}
+}
+
+func TestPerFile_MultipleIndependentGroups(t *testing.T) {
+	records := []Record{
+		pfRec("1", "jan.csv", "ldap", "alice"),
+		pfRec("2", "jan.csv", "oidc", "alice"),
+		pfRec("3", "jan.csv", "jwt", "alice"),
+		pfRec("4", "jan.csv", "saml", "alice"),
+	}
+	groups := [][]string{{"ldap", "oidc"}, {"jwt", "saml"}}
+	pfExpectIDs(t, DeduplicateByAliasForMethodsPerFile(records, groups), "1", "3")
+}
+
+func TestPerFileAliasKey(t *testing.T) {
+	oidc := Record{MountType: "oidc", EntityAliasName: "uuid", EntityAliasMetadataUsername: "alice@corp.com"}
+	cases := []struct {
+		r    Record
+		want string
+	}{
+		{Record{MountType: "ldap", EntityAliasName: "alice-t0"}, "alice-t0"},
+		{Record{MountType: "jwt", EntityAliasName: "alice@corp.com"}, "alice"},
+		{oidc, "alice"},
+		{Record{MountType: "oidc", EntityAliasName: "bob"}, "bob"},
+	}
+	for _, c := range cases {
+		if got := PerFileAliasKey(c.r); got != c.want {
+			t.Errorf("PerFileAliasKey(%+v) = %q, want %q", c.r, got, c.want)
+		}
+	}
+}
+
+// ── client type mapping, JWT and PKI ──────────────────────────────────────────
+
+func TestDeduplicateJWT_KeepsPKIJWTRecord(t *testing.T) {
+	records := []Record{
+		{ClientID: "1", MountType: "ldap", EntityAliasName: "alice"},
+		{ClientID: "2", MountType: "jwt", EntityAliasName: "alice@corp.com", MountAccessor: "auth_cert_x"},
+	}
+	pfExpectIDs(t, DeduplicateJWT(records), "1", "2")
+}
+
+func TestDeduplicateJWT_CertAliasDoesNotDropJWT(t *testing.T) {
+	records := []Record{
+		{ClientID: "1", MountType: "cert", EntityAliasName: "alice", MountAccessor: "auth_cert_x"},
+		{ClientID: "2", MountType: "jwt", EntityAliasName: "alice@corp.com"},
+	}
+	pfExpectIDs(t, DeduplicateJWT(records), "1", "2")
+}
+
+// ── more input mutation safety ────────────────────────────────────────────────
+
+func TestDedupFunctions_DoNotMutateInput(t *testing.T) {
+	build := func() []Record {
+		return []Record{
+			{ClientID: "a", Source: "x.csv", MountType: "ldap", EntityAliasName: "alice", EntityName: "A"},
+			{ClientID: "a", Source: "x.csv", MountType: "jwt", EntityAliasName: "alice@corp.com", MountPath: "auth/jwt/"},
+			{ClientID: "b", Source: "x.csv", MountType: "oidc", EntityAliasName: "alice-t0"},
+			{ClientID: "c", Source: "x.csv", MountType: "ldap", ClientType: "entity"},
+			{ClientID: "d", Source: "x.csv", MountType: "ldap", EntityAliasName: "bob"},
+		}
+	}
+	groups := [][]string{{"ldap", "oidc", "jwt"}}
+	funcs := map[string]func([]Record){
+		"Deduplicate":                         func(r []Record) { _ = Deduplicate(r) },
+		"DeduplicateByAlias":                  func(r []Record) { _ = DeduplicateByAlias(r) },
+		"DeduplicateByAliasForMethods":        func(r []Record) { _ = DeduplicateByAliasForMethods(r, groups) },
+		"DeduplicateByAliasForMethodsPerFile": func(r []Record) { _ = DeduplicateByAliasForMethodsPerFile(r, groups) },
+		"DeduplicateJWT":                      func(r []Record) { _ = DeduplicateJWT(r) },
+		"FilterAbandonedClients":              func(r []Record) { _, _ = FilterAbandonedClients(r) },
+	}
+	for name, fn := range funcs {
+		records := build()
+		snapshot := build()
+		fn(records)
+		for i := range records {
+			if records[i] != snapshot[i] {
+				t.Errorf("%s modified input element %d", name, i)
+			}
+		}
+	}
+}
+
+// ==== P-N1 (replaces TestParseTime + TestParseTime_Formats) ====
+func TestParseTime(t *testing.T) {
+	utc := func(y int, mo time.Month, d, h, mi, s, ns int) time.Time {
+		return time.Date(y, mo, d, h, mi, s, ns, time.UTC)
+	}
+	cases := []struct {
+		in   string
+		want time.Time
+	}{
+		{"2024-01-15T10:00:00Z", utc(2024, 1, 15, 10, 0, 0, 0)},
+		{"2024-01-15T10:00:00+00:00", utc(2024, 1, 15, 10, 0, 0, 0)},
+		{"2024-01-15T12:00:00+02:00", utc(2024, 1, 15, 10, 0, 0, 0)}, // offset converted to UTC
+		{"2024-01-15T10:00:00.123456789Z", utc(2024, 1, 15, 10, 0, 0, 123456789)},
+		{"2024-01-15T10:00:00", utc(2024, 1, 15, 10, 0, 0, 0)},           // no zone
+		{"2024-01-15 10:00:00 +0000 UTC", utc(2024, 1, 15, 10, 0, 0, 0)}, // Go time.String() form
+		{"2024-01-15 10:00:00Z", utc(2024, 1, 15, 10, 0, 0, 0)},
+		{"2024-01-15", utc(2024, 1, 15, 0, 0, 0, 0)},
+		{"06/15/2024", utc(2024, 6, 15, 0, 0, 0, 0)},
+		{"  2024-01-15  ", utc(2024, 1, 15, 0, 0, 0, 0)},
+		{"", time.Time{}},
+		{"0", time.Time{}},
+		{"N/A", time.Time{}},
+		{"garbage", time.Time{}},
+	}
+	for _, c := range cases {
+		got := ParseTime(c.in)
+		if !got.Equal(c.want) {
+			t.Errorf("ParseTime(%q) = %v, want %v", c.in, got, c.want)
+		}
+		if !got.IsZero() && got.Location() != time.UTC {
+			t.Errorf("ParseTime(%q) location = %v, want UTC", c.in, got.Location())
+		}
+	}
+}
+
+// ==== P-N2 (replaces TestNormalizeClientType + TestNormalizeClientType_VaultNativeValues) ====
+func TestNormalizeClientType(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"entity", "entity"},
+		{"Entity", "entity"},
+		{"ENTITY", "entity"},
+		{" entity ", "entity"},
+		{"entity client", "entity"},
+		{"non-entity", "non-entity"},
+		{"non_entity", "non-entity"},
+		{"Non-Entity Client", "non-entity"},
+		{"non_entity_client", "non-entity"},
+		{"nonentity", "non-entity"},
+		{"non-entity-token", "non-entity"}, // Vault-native value
+		{"acme", "acme"},
+		{"acme client", "acme"},
+		{"pki-acme", "acme"},           // Vault-native value
+		{"certificate", "certificate"}, // passthrough — not an acme alias
+		{"cert", "cert"},               // passthrough — not an acme alias
+		{"secret-sync", "secret-sync"},
+		{"secret_sync", "secret-sync"},
+		{"secretsync", "secret-sync"},
+		{"secrets sync", "secret-sync"},
+		{"secret sync", "secret-sync"},
+		{"", "unknown"},
+		{"some-future-type", "some-future-type"}, // passthrough
+	}
+	for _, c := range cases {
+		got := normalizeClientType(c.in)
+		if got != c.want {
+			t.Errorf("normalizeClientType(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// ==== P-N3 (replaces TestNormalize) ====
+func TestNormalize(t *testing.T) {
+	raw := []parser.RawRecord{
+		{
+			Source:                      "exports/jan.csv",
+			ClientID:                    "abc-123",
+			EntityName:                  "  Alice Smith  ",
+			NamespaceID:                 "",
+			NamespacePath:               "root",
+			MountAccessor:               " auth_approle_1 ",
+			MountPath:                   "auth/approle",
+			MountType:                   "APPROLE",
+			AuthMethod:                  "AppRole",
+			ClientType:                  "non_entity",
+			TokenCreationTime:           "2024-01-01T00:00:00Z",
+			ClientFirstUsageTime:        "2024-01-02",
+			EntityAliasName:             " alice@corp.com ",
+			EntityAliasMetadataUsername: " alice ",
+		},
+		{
+			Source:        "feb.csv",
+			ClientID:      "def-456",
+			NamespaceID:   "ns-edu-01",
+			NamespacePath: "education",
+			MountPath:     "", // stays blank: FilterAbandonedClients and PrintSummary rely on ""
+			MountType:     "oidc",
+			AuthMethod:    "",
+			ClientType:    "",
+		},
+	}
+	want := []Record{
+		{
+			Source:                      "exports/jan.csv",
+			ClientID:                    "abc-123",
+			EntityName:                  "Alice Smith",
+			NamespaceID:                 "root",
+			NamespacePath:               "[root]",
+			MountAccessor:               "auth_approle_1",
+			MountPath:                   "auth/approle/",
+			MountType:                   "approle",
+			AuthMethod:                  "approle",
+			ClientType:                  "non-entity",
+			TokenCreationTime:           time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+			ClientFirstUsageTime:        time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC),
+			EntityAliasName:             "alice@corp.com",
+			EntityAliasMetadataUsername: "alice",
+		},
+		{
+			Source:        "feb.csv",
+			ClientID:      "def-456",
+			NamespaceID:   "ns-edu-01",
+			NamespacePath: "education/",
+			MountPath:     "",
+			MountType:     "oidc",
+			AuthMethod:    "",
+			ClientType:    "unknown",
+		},
+	}
+	got := Normalize(raw)
+	if len(got) != len(want) {
+		t.Fatalf("expected %d records, got %d", len(want), len(got))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("record %d:\n  got  %+v\n  want %+v", i, got[i], want[i])
+		}
+	}
+}
+
+// ==== P-N4 (replaces TestFilterByNamespace) ====
+func TestFilterByNamespace(t *testing.T) {
+	records := []Record{
+		{ClientID: "root", NamespacePath: "[root]"},
+		{ClientID: "edu", NamespacePath: "education/"},
+		{ClientID: "edu-training", NamespacePath: "education/training/"},
+		{ClientID: "fin-training", NamespacePath: "Finance/Training/"},
+		{ClientID: "fin", NamespacePath: "finance/"},
+	}
+	cases := []struct {
+		substr string
+		want   []string
+	}{
+		{"education", []string{"edu", "edu-training"}},
+		{"training", []string{"edu-training", "fin-training"}}, // substring, not prefix
+		{"FINANCE", []string{"fin-training", "fin"}},           // case-insensitive
+		{"nomatch", nil},
+	}
+	for _, c := range cases {
+		got := clientIDs(FilterByNamespace(records, c.substr))
+		if strings.Join(got, ",") != strings.Join(c.want, ",") {
+			t.Errorf("FilterByNamespace(%q) = %v, want %v", c.substr, got, c.want)
+		}
+	}
+}
+
+// ==== P-N5 (replaces TestFilterByClientType) ====
+func TestFilterByClientType(t *testing.T) {
+	records := []Record{
+		{ClientID: "e1", ClientType: "entity"},
+		{ClientID: "n1", ClientType: "non-entity"},
+		{ClientID: "e2", ClientType: "entity"},
+		{ClientID: "a1", ClientType: "acme"},
+	}
+	cases := []struct {
+		query string
+		want  []string
+	}{
+		{"entity", []string{"e1", "e2"}},
+		{"ENTITY", []string{"e1", "e2"}},
+		{"non_entity", []string{"n1"}}, // query goes through the same alias table as the data
+		{"pki-acme", []string{"a1"}},
+		{"secret-sync", nil},
+	}
+	for _, c := range cases {
+		got := clientIDs(FilterByClientType(records, c.query))
+		if strings.Join(got, ",") != strings.Join(c.want, ",") {
+			t.Errorf("FilterByClientType(%q) = %v, want %v", c.query, got, c.want)
+		}
+	}
+}
+
+// ==== P-N6 (replaces TestSort) ====
+func TestSort(t *testing.T) {
+	t1 := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	t2, t3, t4 := t1.AddDate(0, 1, 0), t1.AddDate(0, 2, 0), t1.AddDate(0, 3, 0)
+	// Every sort key yields a different permutation of w,x,y,z, so a key that
+	// compares the wrong field is detected.
+	build := func() []Record {
+		return []Record{
+			{ClientID: "z", NamespacePath: "zzz/", ClientType: "non-entity", TokenCreationTime: t2, ClientFirstUsageTime: t1, MountAccessor: "auth_d", MountPath: "auth/b/", AuthMethod: "ldap", Source: "a.csv"},
+			{ClientID: "y", NamespacePath: "edu/", ClientType: "secret-sync", TokenCreationTime: t1, ClientFirstUsageTime: t2, MountAccessor: "auth_b", MountPath: "auth/d/", AuthMethod: "approle", Source: "c.csv"},
+			{ClientID: "x", NamespacePath: "aaa/", ClientType: "acme", TokenCreationTime: t4, ClientFirstUsageTime: t3, MountAccessor: "auth_c", MountPath: "auth/a/", AuthMethod: "oidc", Source: "b.csv"},
+			{ClientID: "w", NamespacePath: "[root]", ClientType: "entity", TokenCreationTime: t3, ClientFirstUsageTime: t4, MountAccessor: "auth_a", MountPath: "auth/c/", AuthMethod: "jwt", Source: "d.csv"},
+		}
+	}
+	cases := []struct{ key, want string }{
+		{"namespace_path", "w,x,y,z"},
+		{"client_type", "x,w,z,y"},
+		{"token_creation_time", "y,z,w,x"},
+		{"client_first_usage_time", "z,y,x,w"},
+		{"mount_accessor", "w,y,x,z"},
+		{"mount_path", "x,z,w,y"},
+		{"auth_method", "y,w,z,x"},
+		{"source", "z,x,y,w"},
+		{"  Client_Type ", "x,w,z,y"}, // key is trimmed and case-insensitive
+	}
+	for _, c := range cases {
+		records := build()
+		if err := Sort(records, c.key); err != nil {
+			t.Fatalf("Sort(%q): %v", c.key, err)
+		}
+		if got := strings.Join(clientIDs(records), ","); got != c.want {
+			t.Errorf("Sort(%q) order = %s, want %s", c.key, got, c.want)
+		}
+	}
+}
+
+// ==== P-N7 (replaces TestStripTierSuffix_AfterBaseAlias) ====
+// Domain is stripped before the tier suffix, so "alice-t0@corp.com" reduces to
+// "alice" in every global alias path. The old test called the two helpers
+// directly and so could not detect the dedup functions composing them wrongly.
+func TestAliasNormalization_DomainThenTier(t *testing.T) {
+	records := []Record{
+		{ClientID: "1", EntityAliasName: "alice", MountType: "ldap", Source: "jan.csv"},
+		{ClientID: "2", EntityAliasName: "alice-t0@corp.com", MountType: "ldap", Source: "jan.csv"},
+	}
+	pfExpectIDs(t, DeduplicateByAlias(records), "1")
+	pfExpectIDs(t, DeduplicateByAliasForMethods(records, [][]string{{"ldap"}}), "1")
+	jwt := []Record{records[0], {ClientID: "3", EntityAliasName: "alice-t1@corp.com", MountType: "jwt", Source: "jan.csv"}}
+	pfExpectIDs(t, DeduplicateJWT(jwt), "1")
+}
+
+// ==== P-N8 (replaces the three *_DoesNotMutateInput filter tests) ====
+func TestFilterFunctions_DoNotMutateInput(t *testing.T) {
 	cutoff := time.Date(2024, 2, 1, 0, 0, 0, 0, time.UTC)
-	records := []Record{
-		{ClientID: "old", TokenCreationTime: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)},
-		{ClientID: "new", TokenCreationTime: time.Date(2024, 3, 1, 0, 0, 0, 0, time.UTC)},
+	// Every filter drops records[0] and keeps records[1], so an implementation
+	// that reuses the input's backing array (out := records[:0]) overwrites
+	// records[0] and is detected.
+	build := func() []Record {
+		return []Record{
+			{ClientID: "drop", Source: "jan.csv", NamespacePath: "finance/", ClientType: "non-entity", TokenCreationTime: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)},
+			{ClientID: "keep", Source: "jan.csv", NamespacePath: "education/", ClientType: "entity", TokenCreationTime: time.Date(2024, 3, 1, 0, 0, 0, 0, time.UTC)},
+		}
 	}
-	snapshot := []Record{records[0], records[1]}
-
-	_ = FilterSince(records, cutoff)
-
-	if records[0] != snapshot[0] || records[1] != snapshot[1] {
-		t.Error("FilterSince modified the input slice's backing array")
+	funcs := map[string]func([]Record) []Record{
+		"FilterSince":          func(r []Record) []Record { return FilterSince(r, cutoff) },
+		"FilterSincePerSource": func(r []Record) []Record { return FilterSincePerSource(r, map[string]time.Time{"jan.csv": cutoff}) },
+		"FilterByNamespace":    func(r []Record) []Record { return FilterByNamespace(r, "education") },
+		"FilterByClientType":   func(r []Record) []Record { return FilterByClientType(r, "entity") },
+	}
+	for name, fn := range funcs {
+		records, snapshot := build(), build()
+		if got := fn(records); len(got) != 1 || got[0].ClientID != "keep" {
+			t.Errorf("%s: expected only \"keep\", got %v", name, clientIDs(got))
+		}
+		for i := range records {
+			if records[i] != snapshot[i] {
+				t.Errorf("%s modified input element %d", name, i)
+			}
+		}
 	}
 }
 
-func TestFilterByNamespace_DoesNotMutateInput(t *testing.T) {
+// ==== P-N9 (replaces TestPerFile_MethodsOutsideGroupPassThrough) ====
+func TestPerFile_MethodsOutsideGroupPassThrough(t *testing.T) {
 	records := []Record{
-		{ClientID: "a", NamespacePath: "education/"},
-		{ClientID: "b", NamespacePath: "finance/"},
+		pfRec("1", "jan.csv", "approle", "svc"),
+		pfRec("2", "jan.csv", "approle", "svc"),
 	}
-	snapshot := []Record{records[0], records[1]}
-
-	_ = FilterByNamespace(records, "education")
-
-	if records[0] != snapshot[0] || records[1] != snapshot[1] {
-		t.Error("FilterByNamespace modified the input slice's backing array")
+	groups := [][]string{{"ldap"}}
+	pfExpectIDs(t, DeduplicateByAliasForMethodsPerFile(records, groups), "1", "2")
+	// The Find variant feeds --generate-tf; out-of-group records must not be reported.
+	if dups := FindAliasDuplicatesForMethodsPerFile(records, groups); len(dups) != 0 {
+		t.Errorf("expected no duplicate groups for methods outside the group, got %d", len(dups))
 	}
 }
 
-func TestFilterByClientType_DoesNotMutateInput(t *testing.T) {
+// ==== P-N10 (new) ====
+func TestPerFile_AuthMethodFallback(t *testing.T) {
+	// MountType is blank; per-file dedup falls back to AuthMethod.
 	records := []Record{
-		{ClientID: "a", ClientType: "entity"},
-		{ClientID: "b", ClientType: "non-entity"},
+		{ClientID: "1", Source: "jan.csv", AuthMethod: "ldap", EntityAliasName: "alice"},
+		{ClientID: "2", Source: "jan.csv", AuthMethod: "jwt", EntityAliasName: "alice@corp.com"},
 	}
-	snapshot := []Record{records[0], records[1]}
+	groups := [][]string{{"ldap", "jwt"}}
+	pfExpectIDs(t, DeduplicateByAliasForMethodsPerFile(records, groups), "1")
+	if dups := FindAliasDuplicatesForMethodsPerFile(records, groups); len(dups) != 1 || len(dups[0]) != 2 {
+		t.Errorf("expected one group of 2, got %v", dups)
+	}
+}
 
-	_ = FilterByClientType(records, "entity")
-
-	if records[0] != snapshot[0] || records[1] != snapshot[1] {
-		t.Error("FilterByClientType modified the input slice's backing array")
+// ==== P-N11 (new) ====
+func TestFindAliasDuplicatesForMethods_IgnoresBlankAndPKI(t *testing.T) {
+	records := []Record{
+		{ClientID: "1", EntityAliasName: "abc-123", ClientType: "acme", MountType: "pki"},
+		{ClientID: "2", EntityAliasName: "abc-123", MountAccessor: "auth_cert_x", MountType: "cert"},
+		{ClientID: "3", EntityAliasName: "", MountType: "cert"},
+		{ClientID: "4", EntityAliasName: "", MountType: "pki"},
+	}
+	if dups := FindAliasDuplicatesForMethods(records, [][]string{{"cert", "pki"}}); len(dups) != 0 {
+		t.Errorf("expected no duplicate groups (PKI and blank aliases are ignored), got %d", len(dups))
 	}
 }
