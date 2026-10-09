@@ -245,7 +245,6 @@ func sortedKeys(m map[string]int) []string {
 	return keys
 }
 
-
 func printRow(w io.Writer, cols []column, value func(column) string) {
 	var sb strings.Builder
 	for i, c := range cols {
@@ -280,4 +279,3 @@ func fmtTime(t time.Time) string {
 	}
 	return t.UTC().Format("2006-01-02 15:04:05Z")
 }
-

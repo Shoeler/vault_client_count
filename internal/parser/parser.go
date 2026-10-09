@@ -4,6 +4,7 @@
 package parser
 
 import (
+	"bufio"
 	"encoding/csv"
 	"fmt"
 	"io"
@@ -35,22 +36,23 @@ type RawRecord struct {
 // knownColumns maps all recognised (lowercased, trimmed) header variants to
 // a canonical field name used by the column mapper below.
 var knownColumns = map[string]string{
-	"client_id":              "client_id",
-	"entity_name":            "entity_name",
-	"namespace_id":           "namespace_id",
-	"namespace_path":         "namespace_path",
-	"mount_accessor":         "mount_accessor",
-	"mount_path":             "mount_path",
-	"mount_type":             "mount_type",
-	"auth_method":            "auth_method",
-	"client_type":            "client_type",
-	"token_creation_time":    "token_creation_time",
-	"client_first_usage_time": "client_first_usage_time",
-	"entity_alias_name":                  "entity_alias_name",
-	"entity_alias_metadata.username":     "entity_alias_metadata_username",
+	"client_id":                      "client_id",
+	"entity_name":                    "entity_name",
+	"namespace_id":                   "namespace_id",
+	"namespace_path":                 "namespace_path",
+	"mount_accessor":                 "mount_accessor",
+	"mount_path":                     "mount_path",
+	"mount_type":                     "mount_type",
+	"auth_method":                    "auth_method",
+	"client_type":                    "client_type",
+	"token_creation_time":            "token_creation_time",
+	"client_first_usage_time":        "client_first_usage_time",
+	"entity_alias_name":              "entity_alias_name",
+	"entity_alias_metadata.username": "entity_alias_metadata_username",
 	// Legacy / alternative column names:
 	"timestamp":              "token_creation_time", // Vault < 1.17
 	"first_seen":             "client_first_usage_time",
+	"client_first_used_time": "client_first_usage_time", // variant emitted by some Vault versions
 	"namespace":              "namespace_path",
 	"mount":                  "mount_path",
 	"auth_backend":           "auth_method",
@@ -72,15 +74,51 @@ func ParseFile(path string) ([]RawRecord, error) {
 	return parseReader(f, path)
 }
 
+// warnOut receives parser warnings. Tests may replace it.
+var warnOut io.Writer = os.Stderr
+
+// parseReader reads the CSV one physical line at a time and parses each line
+// with its own csv.Reader. Vault export fields never contain newlines, so a
+// record can never legitimately span lines. Parsing per line keeps LazyQuotes
+// tolerance for stray quotes inside fields while preventing an unterminated
+// opening quote from silently swallowing every following row into one field.
 func parseReader(r io.Reader, source string) ([]RawRecord, error) {
-	cr := csv.NewReader(r)
-	cr.TrimLeadingSpace = true
-	cr.LazyQuotes = true
+	br := bufio.NewReader(r)
+	lineNum := 0
+
+	// nextRow returns the fields of the next non-blank line, or io.EOF.
+	// malformed is true when the line contains an unterminated quoted field;
+	// in that case the fields come from a plain comma split.
+	nextRow := func() (row []string, malformed bool, err error) {
+		for {
+			line, readErr := br.ReadString('\n')
+			if line == "" && readErr != nil {
+				return nil, false, readErr
+			}
+			lineNum++
+			if readErr != nil && readErr != io.EOF {
+				return nil, false, readErr
+			}
+			row, malformed = parseLine(line)
+			if row != nil {
+				return row, malformed, nil
+			}
+			// Blank line: keep reading.
+		}
+	}
 
 	// Read header row.
-	headers, err := cr.Read()
+	headers, malformed, err := nextRow()
 	if err != nil {
 		return nil, fmt.Errorf("read header: %w", err)
+	}
+	if malformed {
+		return nil, fmt.Errorf("read header: %s line %d: unterminated quoted field", source, lineNum)
+	}
+
+	// Strip a UTF-8 byte order mark so it does not corrupt the first header.
+	if len(headers) > 0 {
+		headers[0] = strings.TrimPrefix(headers[0], "\ufeff")
 	}
 
 	// Build index: canonical field name → column index.
@@ -108,17 +146,17 @@ func parseReader(r io.Reader, source string) ([]RawRecord, error) {
 	}
 
 	var records []RawRecord
-	lineNum := 1 // 1 = header already consumed
 	for {
-		lineNum++
-		row, err := cr.Read()
+		row, malformed, err := nextRow()
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
-			// Skip malformed rows but report them.
-			fmt.Fprintf(os.Stderr, "warning: %s line %d: %v (skipped)\n", source, lineNum, err)
-			continue
+			return nil, fmt.Errorf("%s line %d: %w", source, lineNum, err)
+		}
+		if malformed {
+			fmt.Fprintf(warnOut, "warning: %s line %d: unterminated quoted field; "+
+				"parsed by splitting on commas with quotes removed (check this row)\n", source, lineNum)
 		}
 
 		clientID := get(row, "client_id")
@@ -145,4 +183,45 @@ func parseReader(r io.Reader, source string) ([]RawRecord, error) {
 	}
 
 	return records, nil
+}
+
+// parseLine parses one physical CSV line. It returns nil for a blank line.
+//
+// The line is parsed by a fresh csv.Reader with LazyQuotes, so a stray quote
+// inside an unquoted field (a"b) is kept as a literal character. The reader
+// cannot see past the end of the line, so an opening quote that is never
+// closed shows up as a field containing the line's newline. Such a line is
+// reported as malformed and re-split on commas with double quotes removed,
+// so the row is still counted and its columns stay aligned as far as
+// possible.
+func parseLine(line string) (fields []string, malformed bool) {
+	if !strings.HasSuffix(line, "\n") {
+		line += "\n" // so an unterminated quote on the last line is detected too
+	}
+	cr := csv.NewReader(strings.NewReader(line))
+	cr.TrimLeadingSpace = true
+	cr.LazyQuotes = true
+	// Rows may have fewer fields than the header (for example when trailing
+	// empty columns were trimmed); get() treats missing fields as blank.
+	cr.FieldsPerRecord = -1
+
+	row, err := cr.Read()
+	if err != nil {
+		// io.EOF means a blank line. With LazyQuotes and FieldsPerRecord=-1
+		// the reader reports no other errors for in-memory input.
+		return nil, false
+	}
+	for _, f := range row {
+		// csv.Reader folds "\r\n" into "\n", so checking for '\n' alone
+		// catches runaway quotes for both line-ending styles.
+		if strings.Contains(f, "\n") {
+			raw := strings.TrimRight(line, "\r\n")
+			parts := strings.Split(raw, ",")
+			for i, p := range parts {
+				parts[i] = strings.ReplaceAll(p, `"`, "")
+			}
+			return parts, true
+		}
+	}
+	return row, false
 }

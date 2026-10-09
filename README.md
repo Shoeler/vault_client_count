@@ -8,7 +8,7 @@ versions), and displays a summary of client counts by mount path and type.
 
 ## Features
 
-- Accepts **multiple CSV files** via `-f file1.csv file2.csv ...` or repeated `-f` flags
+- Accepts **multiple CSV files** via `-f file1.csv file2.csv ...`, repeated `-f` flags, or wildcard patterns (`-f 'exports/*.csv'`)
 - Handles **column name variants** across Vault versions:
   - `timestamp` → `token_creation_time` (Vault < 1.17)
   - `namespace` → `namespace_path`
@@ -34,18 +34,22 @@ make build
 # Binary is at ./bin/vault-csv-normalizer
 ```
 
-Requires **Go 1.22+**. No external dependencies — pure standard library.
+Requires **Go 1.20+**. No external dependencies — pure standard library.
 
 ## Usage
 
 ```
 vault-csv-normalizer -f <file1.csv> [file2.csv ...] [options]
 vault-csv-normalizer -f <file1.csv> -f <file2.csv> [options]
+vault-csv-normalizer -f '<pattern>' [options]
 
 OPTIONS:
   -f string
         One or more Vault client export CSV files. May be specified multiple
-        times or followed by multiple paths.
+        times or followed by multiple paths. Wildcard patterns (*, ?, [...])
+        are expanded; quote a pattern to have the tool expand it instead of
+        the shell. A pattern that matches no files is an error, and a file
+        listed more than once is read once.
   -sort string
         Column to sort by: namespace_path, client_type, token_creation_time,
         client_first_usage_time, mount_accessor, mount_path, auth_method, source
@@ -112,10 +116,40 @@ OPTIONS:
         Records without an alias are always kept. May be combined with
         --dedup-alias, --dedup-methods, and/or -d.
   -remove-abandoned-clients
-        Remove abandoned clients where entity_name and entity_alias_name are
-        both blank. This includes records with no auth mount (mount_path
+        Remove abandoned entity clients where entity_name and entity_alias_name
+        are both blank. Only records with client_type entity are removed; other
+        client types (such as non-entity) are never removed. This includes records with no auth mount (mount_path
         empty) and merged/deleted entities (mount_path present). Applied after
         all deduplication steps.
+  -dedup-methods-per-file string
+        Like -dedup-methods but scoped to each input file independently.
+        Records in different files are never collapsed against each other, and
+        tier suffixes (-t0/-t1/-t2) are not stripped. Repeatable to define
+        multiple groups.
+  -generate-tf
+        Write Terraform HCL to vault-aliases.tf in the current directory.
+        Requires -dedup-methods-per-file. Each per-file alias duplicate group
+        becomes one vault_identity_entity with one vault_identity_entity_alias
+        per record in the group. Mount accessors are emitted as Terraform
+        variables. Does not affect counts or summary output.
+  -list-methods
+        Print every distinct auth method found in the input files (with record
+        counts and alias coverage), then exit. Useful for deciding
+        -dedup-methods groups.
+  -monthly-output string
+        Write month-by-month cumulative client counts as a tab-separated file
+        to this path (useful for trend forecasting). One row is written for
+        every calendar month from the earliest to the latest seen. With -p,
+        each row has separate non-PKI and PKI cumulative columns. Runs after
+        the summaries are printed.
+  -monthly-entitlement int
+        License entitlement count to include in each row of the monthly
+        output. If omitted, it is prompted for when stdin is a terminal and is
+        an error otherwise.
+  -soko
+        With -monthly-output, write a headerless three-column file
+        (end-of-month date, entitlement, total clients). With -p, PKI clients
+        are divided by 40, rounded, and folded into the total.
   -per-file
         Print a summary for each input file before the combined summary
   -debug
@@ -139,6 +173,10 @@ vault-csv-normalizer -f jan.csv feb.csv mar.csv
 
 # Or use repeated -f flags
 vault-csv-normalizer -f jan.csv -f feb.csv -f mar.csv
+
+# Wildcard file list — expanded by the shell, or by the tool when quoted
+vault-csv-normalizer -f exports/*.csv -d
+vault-csv-normalizer -f 'exports/2024-*.csv' -d
 
 # Sort by client type
 vault-csv-normalizer -f export.csv --sort client_type
@@ -173,11 +211,12 @@ vault-csv-normalizer -f export.csv --debug
 vault-csv-normalizer -f jan.csv feb.csv -d
 
 # Deduplicate by entity alias — strips domain (@corp.com) and tier (-t0/-t1/-t2)
-# "alice", "alice-t0", "alice-t1", "alice@corp.com" → counted as one client per file
+# "alice", "alice-t0", "alice-t1", "alice@corp.com" → counted as one client across
+# all files (within one identity group: LDAP and OIDC share a group; JWT is separate)
 vault-csv-normalizer -f jan.csv feb.csv --dedup-alias
 
-# Combine both: alias dedup collapses tier/domain variants within each file,
-# then -d deduplicates the same client_id appearing across multiple files
+# Combine both: alias dedup collapses tier/domain variants across all files,
+# then -d deduplicates the same client_id appearing in more than one file
 vault-csv-normalizer -f jan.csv feb.csv --dedup-alias -d
 
 # Drop JWT records where the same person already appears via LDAP or OIDC
@@ -191,6 +230,9 @@ vault-csv-normalizer -f export.csv --remove-abandoned-clients
 
 # Same as above, with debug count output for removed rows
 vault-csv-normalizer -f export.csv --remove-abandoned-clients --debug
+
+# Generate Terraform that consolidates LDAP/OIDC duplicates into one entity each
+vault-csv-normalizer -f export.csv --dedup-methods-per-file ldap,oidc --generate-tf
 
 # Deduplicate LDAP and OIDC as one identity group — same person via either
 # method is counted once; other auth methods are unaffected
@@ -309,6 +351,41 @@ PKI clients (cert auth with `mount_accessor` prefix `auth_cert`, or
 `client_type=acme`) are **always excluded** from alias dedup and always kept.
 Use `-p` to count them separately.
 
+## Terraform generation
+
+`--generate-tf` writes `vault-aliases.tf` to the current directory. It requires
+`--dedup-methods-per-file` and works from the same alias duplicate groups that
+flag prints under "Per-file method-scoped alias duplicates found": records in
+the same file and method group whose normalized alias matches. Each group
+represents one person who is counted as several clients because they
+authenticated through several auth methods. Linking those clients to one
+entity in Vault stops the double counting.
+
+For each group the file contains:
+
+- one `vault_identity_entity`, named after the shared alias with any domain
+  suffix removed (OIDC records use `entity_alias_metadata.username`)
+- one `vault_identity_entity_alias` per record in the group, carrying the
+  record's `entity_alias_name` and pointing at the entity through
+  `canonical_id`
+
+Mount accessors are declared once each as Terraform variables
+(`accessor_<accessor>`) with the exported value as the default. An alias whose
+record has no `mount_accessor` gets a `"TODO"` placeholder. Resource names are
+petnames (for example `amber_bear`, with aliases `amber_bear_0`,
+`amber_bear_1`), and resources are grouped under a comment header for each
+source file.
+
+```bash
+vault-csv-normalizer -f jan.csv feb.csv --dedup-methods-per-file ldap,oidc --generate-tf
+```
+
+Records with a blank `entity_alias_name` and PKI clients never form groups, so
+they never appear in the file. If no groups are found, nothing is written and
+an existing `vault-aliases.tf` is left unchanged. The flag does not change
+counts, dedup behaviour, or summary output. Review the generated file before
+applying it.
+
 ## CSV Format
 
 The tool expects CSVs exported from the Vault activity export API
@@ -339,6 +416,7 @@ The tool automatically maps legacy and alternate column names:
 |-----------------------|--------------------------|----------------------------|
 | `timestamp`           | `token_creation_time`    | Vault < 1.17               |
 | `first_seen`          | `client_first_usage_time`| Some third-party exports   |
+| `client_first_used_time` | `client_first_usage_time`| Variant emitted by some Vault versions |
 | `namespace`           | `namespace_path`         | Some UI exports            |
 | `mount`               | `mount_path`             | Alternate naming           |
 | `auth_backend`        | `auth_method`            | Older Vault versions       |
@@ -372,9 +450,12 @@ vault-csv-normalizer/
 │   ├── normalizer/
 │   │   ├── normalizer.go    # Value normalization, filtering, sorting
 │   │   └── normalizer_test.go
-│   └── renderer/
-│       ├── renderer.go      # Pretty-print table and summary
-│       └── renderer_test.go
+│   ├── renderer/
+│   │   ├── renderer.go      # Pretty-print table and summary
+│   │   └── renderer_test.go
+│   └── tfgen/
+│       ├── tfgen.go         # Terraform HCL generation (--generate-tf)
+│       └── tfgen_test.go
 ├── testdata/
 │   ├── export-2024-01.csv           # Modern Vault export format
 │   └── export-2024-02-legacy.csv    # Legacy format (timestamp column)
