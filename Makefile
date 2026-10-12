@@ -2,7 +2,7 @@ BINARY     := vault-csv-normalizer
 CMD        := ./cmd/vault-csv-normalizer
 BUILD_DIR  := ./bin
 
-.PHONY: all build test lint clean help
+.PHONY: all build test lint clean help install-hooks
 
 all: build
 
@@ -27,6 +27,11 @@ lint:
 ## clean: remove build artifacts
 clean:
 	rm -rf $(BUILD_DIR)
+
+## install-hooks: enable the gitleaks pre-commit hook (scripts/git-hooks)
+install-hooks:
+	git config core.hooksPath scripts/git-hooks
+	@echo "Git hooks enabled (requires gitleaks: brew install gitleaks)"
 
 ## help: show this message
 help:

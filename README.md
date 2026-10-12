@@ -36,6 +36,8 @@ make build
 
 Requires **Go 1.20+**. No external dependencies — pure standard library.
 
+Contributors: run `make install-hooks` once after cloning to enable the gitleaks pre-commit secret scan (needs `brew install gitleaks`).
+
 ## Usage
 
 ```

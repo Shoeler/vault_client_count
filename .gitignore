@@ -30,3 +30,23 @@ testdata/real/
 # Python
 __pycache__/
 *.pyc
+
+# Secrets and local state
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+kubeconfig*
+*.kubeconfig
+credentials.tfrc.json
+*.swp
+*.swo
+*~
+*.tfstate
+*.tfstate.*
+*.tfvars
+.terraform/
+*.salt
+testdata/*.map
