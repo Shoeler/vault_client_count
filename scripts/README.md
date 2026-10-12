@@ -11,6 +11,10 @@ same PKI partition (`-p`), the same abandoned-client counts and the same
 monthly output as on the originals. Only mount path labels in the summary
 differ (they are pseudonymized), so summary rows may sort in a different order.
 
+A Go port lives at `cmd/sanitize-csv` (`go run ./cmd/sanitize-csv --help`). It
+accepts the same flags and produces byte-identical output for the same salt; see
+`cmd/sanitize-csv/README.md`.
+
 Python 3 standard library only.
 
 ### Usage

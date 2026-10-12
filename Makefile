@@ -2,7 +2,7 @@ BINARY     := vault-csv-normalizer
 CMD        := ./cmd/vault-csv-normalizer
 BUILD_DIR  := ./bin
 
-.PHONY: all build test lint clean help install-hooks
+.PHONY: all build install test lint clean help install-hooks
 
 all: build
 
@@ -11,6 +11,12 @@ build:
 	@mkdir -p $(BUILD_DIR)
 	go build -o $(BUILD_DIR)/$(BINARY) $(CMD)
 	@echo "Built $(BUILD_DIR)/$(BINARY)"
+
+## install: build and copy the binary to ~/bin
+install: build
+	@mkdir -p $(HOME)/bin
+	cp $(BUILD_DIR)/$(BINARY) $(HOME)/bin/
+	@echo "Installed $(HOME)/bin/$(BINARY)"
 
 ## test: run all unit tests
 test:
