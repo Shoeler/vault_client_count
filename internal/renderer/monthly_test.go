@@ -1,6 +1,7 @@
 package renderer
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -83,78 +84,6 @@ func TestWriteMonthlyTSV_RowsSortedChronologically(t *testing.T) {
 	}
 	if dates[0] != "2024-01-01" || dates[1] != "2024-02-01" || dates[2] != "2024-03-01" {
 		t.Errorf("expected chronological order, got: %v", dates)
-	}
-}
-
-func TestWriteMonthlyTSV_UnknownTimeBucket(t *testing.T) {
-	records := []normalizer.Record{
-		{ClientType: "entity", TokenCreationTime: mustMonth("2024-01")},
-		{ClientType: "non-entity"}, // zero time — skipped
-	}
-
-	var buf strings.Builder
-	WriteMonthlyTSV(&buf, records, 0)
-	out := buf.String()
-	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
-
-	// Zero-time record is skipped; header row + one dated row.
-	if len(lines) != 2 {
-		t.Errorf("expected 1 header row + 1 data row (zero-time record skipped), got %d:\n%s", len(lines), out)
-	}
-	if strings.Contains(out, "(unknown)") {
-		t.Errorf("expected no '(unknown)' row for zero-time records, got:\n%s", out)
-	}
-}
-
-func TestWriteMonthlyTSV_EntitlementColumn(t *testing.T) {
-	records := []normalizer.Record{
-		{ClientType: "entity", TokenCreationTime: mustMonth("2024-01")},
-		{ClientType: "entity", TokenCreationTime: mustMonth("2024-02")},
-	}
-
-	var buf strings.Builder
-	WriteMonthlyTSV(&buf, records, 1234)
-	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
-
-	// lines[0] is the header row; only data rows carry the entitlement column.
-	for i, line := range lines[1:] {
-		cols := strings.Split(line, "\t")
-		if len(cols) != 3 {
-			t.Fatalf("row %d: expected 3 columns, got %d: %q", i, len(cols), line)
-		}
-		if cols[1] != "1234" {
-			t.Errorf("row %d: expected entitlement '1234', got %q", i, cols[1])
-		}
-	}
-}
-
-func TestWriteMonthlyTSV_CountsAccurate(t *testing.T) {
-	jan := mustMonth("2024-01")
-	feb := mustMonth("2024-02")
-	records := []normalizer.Record{
-		{ClientType: "entity", TokenCreationTime: jan},
-		{ClientType: "entity", TokenCreationTime: jan},
-		{ClientType: "entity", TokenCreationTime: jan},
-		{ClientType: "non-entity", TokenCreationTime: jan},
-		{ClientType: "acme", TokenCreationTime: feb},
-	}
-
-	var buf strings.Builder
-	WriteMonthlyTSV(&buf, records, 500)
-	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
-
-	if len(lines) != 3 {
-		t.Fatalf("expected 1 header row + 2 data rows, got %d", len(lines))
-	}
-
-	janCols := strings.Split(lines[1], "\t")
-	if janCols[2] != "4" {
-		t.Errorf("expected January cumulative total=4, got %q", janCols[2])
-	}
-
-	febCols := strings.Split(lines[2], "\t")
-	if febCols[2] != "5" {
-		t.Errorf("expected February cumulative total=5 (4+1), got %q", febCols[2])
 	}
 }
 
@@ -249,48 +178,6 @@ func TestWriteMonthlyTSVPartitioned_EmptyInput(t *testing.T) {
 	}
 }
 
-func TestWriteMonthlyTSVSoko_NoHeaderThreeColumnsEndOfMonth(t *testing.T) {
-	records := []normalizer.Record{
-		{ClientType: "entity", TokenCreationTime: mustMonth("2024-01")},
-		{ClientType: "entity", TokenCreationTime: mustMonth("2024-01")},
-		{ClientType: "non-entity", TokenCreationTime: mustMonth("2024-01")},
-		{ClientType: "entity", TokenCreationTime: mustMonth("2024-02")},
-		{ClientType: "acme", TokenCreationTime: mustMonth("2024-02")},
-	}
-
-	var buf strings.Builder
-	WriteMonthlyTSVSoko(&buf, records, 500, false)
-	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
-
-	// No header — exactly 2 data rows.
-	if len(lines) != 2 {
-		t.Fatalf("expected 2 data rows (no header), got %d:\n%s", len(lines), buf.String())
-	}
-
-	jan := strings.Split(lines[0], "\t")
-	if len(jan) != 3 {
-		t.Fatalf("expected 3 columns in January row, got %d: %q", len(jan), lines[0])
-	}
-	if jan[0] != "2024-01-31" {
-		t.Errorf("expected end-of-month date '2024-01-31', got %q", jan[0])
-	}
-	if jan[1] != "500" {
-		t.Errorf("expected entitlement '500', got %q", jan[1])
-	}
-	if jan[2] != "3" {
-		t.Errorf("expected total '3' for January, got %q", jan[2])
-	}
-
-	// 2024 is a leap year — February has 29 days.
-	feb := strings.Split(lines[1], "\t")
-	if feb[0] != "2024-02-29" {
-		t.Errorf("expected end-of-month date '2024-02-29', got %q", feb[0])
-	}
-	if feb[2] != "5" {
-		t.Errorf("expected total '5' for February (acme counted plainly since -p not set), got %q", feb[2])
-	}
-}
-
 func TestWriteMonthlyTSVSoko_DecemberRollsToNextYear(t *testing.T) {
 	records := []normalizer.Record{
 		{ClientType: "entity", TokenCreationTime: mustMonth("2024-12")},
@@ -347,5 +234,94 @@ func TestWriteMonthlyTSVSoko_EmptyInput(t *testing.T) {
 	WriteMonthlyTSVSoko(&buf, nil, 500, true)
 	if buf.Len() != 0 {
 		t.Errorf("expected no output for empty input, got: %q", buf.String())
+	}
+}
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("disk full") }
+
+func gapRecords() []normalizer.Record {
+	return []normalizer.Record{
+		{ClientType: "entity", TokenCreationTime: mustMonth("2024-01")},
+		{ClientType: "entity", TokenCreationTime: mustMonth("2024-01")},
+		{ClientType: "acme", TokenCreationTime: mustMonth("2024-01")},
+		{ClientType: "entity", TokenCreationTime: mustMonth("2024-04")},
+		{ClientType: "entity"}, // zero time
+	}
+}
+
+func TestWriteMonthlyTSV_GapMonthsCarryForward(t *testing.T) {
+	var buf strings.Builder
+	skipped, err := WriteMonthlyTSV(&buf, gapRecords(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if skipped != 1 {
+		t.Errorf("expected 1 skipped, got %d", skipped)
+	}
+	want := "date\tentitlement\tcumulative_total\n" +
+		"2024-01-01\t10\t3\n2024-02-01\t10\t3\n2024-03-01\t10\t3\n2024-04-01\t10\t4\n"
+	if buf.String() != want {
+		t.Errorf("got:\n%s\nwant:\n%s", buf.String(), want)
+	}
+}
+
+func TestWriteMonthlyTSVPartitioned_GapMonthsCarryForward(t *testing.T) {
+	var buf strings.Builder
+	skipped, err := WriteMonthlyTSVPartitioned(&buf, gapRecords(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if skipped != 1 {
+		t.Errorf("expected 1 skipped, got %d", skipped)
+	}
+	want := "date\tentitlement\tnon_pki_cumulative_total\tpki_cumulative_total\n" +
+		"2024-01-01\t10\t2\t1\n2024-02-01\t10\t2\t1\n2024-03-01\t10\t2\t1\n2024-04-01\t10\t3\t1\n"
+	if buf.String() != want {
+		t.Errorf("got:\n%s\nwant:\n%s", buf.String(), want)
+	}
+}
+
+func TestWriteMonthlyTSVSoko_GapMonthsCarryForward(t *testing.T) {
+	var buf strings.Builder
+	skipped, err := WriteMonthlyTSVSoko(&buf, gapRecords(), 10, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if skipped != 1 {
+		t.Errorf("expected 1 skipped, got %d", skipped)
+	}
+	want := "2024-01-31\t10\t3\n2024-02-29\t10\t3\n2024-03-31\t10\t3\n2024-04-30\t10\t4\n"
+	if buf.String() != want {
+		t.Errorf("got:\n%s\nwant:\n%s", buf.String(), want)
+	}
+}
+
+func TestWriteMonthlyTSVSoko_CountPKIWithCertAccessor(t *testing.T) {
+	var records []normalizer.Record
+	for i := 0; i < 40; i++ {
+		records = append(records, normalizer.Record{MountAccessor: "auth_cert_x", TokenCreationTime: mustMonth("2024-01")})
+	}
+	records = append(records, normalizer.Record{TokenCreationTime: mustMonth("2024-01")})
+	var buf strings.Builder
+	if _, err := WriteMonthlyTSVSoko(&buf, records, 5, true); err != nil {
+		t.Fatal(err)
+	}
+	if buf.String() != "2024-01-31\t5\t2\n" {
+		t.Errorf("unexpected output %q", buf.String())
+	}
+}
+
+func TestWriteMonthlyTSV_WriteErrorReturned(t *testing.T) {
+	rec := []normalizer.Record{{TokenCreationTime: mustMonth("2024-01")}}
+	if _, err := WriteMonthlyTSV(failingWriter{}, rec, 1); err == nil {
+		t.Error("WriteMonthlyTSV: expected error")
+	}
+	if _, err := WriteMonthlyTSVPartitioned(failingWriter{}, rec, 1); err == nil {
+		t.Error("WriteMonthlyTSVPartitioned: expected error")
+	}
+	if _, err := WriteMonthlyTSVSoko(failingWriter{}, rec, 1, false); err == nil {
+		t.Error("WriteMonthlyTSVSoko: expected error")
 	}
 }

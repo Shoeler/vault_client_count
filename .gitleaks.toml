@@ -1,0 +1,19 @@
+[extend]
+useDefault = true
+
+# Known false positives. Currently none: gitleaks reports no finding on the
+# sanitizer help text, so no real entry is needed. gitleaks refuses an
+# allowlist with no checks, so `regexes` holds a placeholder that matches only
+# an empty secret, which is never reported.
+#
+# Note for future entries: by default `regexes` is matched against the captured
+# secret, not the whole line, so a pattern for surrounding text never matches.
+# To allowlist by line content, add `regexTarget = "line"` (or "match" for the
+# full rule match) to this section and put the line pattern in `regexes`:
+#   regexTarget = "line"
+#   regexes = ['''some line text''']
+[allowlist]
+description = "Known false positives (none yet)"
+regexes = [
+  '''^$''',
+]

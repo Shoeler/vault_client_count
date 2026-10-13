@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+if ! command -v gitleaks >/dev/null 2>&1; then
+  echo "pre-commit: gitleaks not installed (brew install gitleaks); skipping secret scan" >&2
+  exit 0
+fi
+exec gitleaks git --pre-commit --staged --redact --no-banner

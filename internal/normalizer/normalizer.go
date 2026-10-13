@@ -112,8 +112,10 @@ var clientTypeAliases = map[string]string{
 	"non-entity client": "non-entity",
 	"non_entity_client": "non-entity",
 	"nonentity":         "non-entity",
+	"non-entity-token":  "non-entity",
 	"acme":              "acme",
 	"acme client":       "acme",
+	"pki-acme":          "acme",
 	"secret-sync":       "secret-sync",
 	"secret_sync":       "secret-sync",
 	"secretsync":        "secret-sync",
@@ -240,8 +242,11 @@ func aliasKeyFor(r Record) aliasKey {
 	}
 }
 
-// FindAliasDuplicates groups records by (BaseAlias, source file) and returns
-// every group that contains more than one record. Records with a blank
+// FindAliasDuplicates groups records by aliasKeyFor (normalized alias, mount
+// group) across all input files, regardless of source file or mount accessor,
+// and returns every group that contains more than one record. The alias is
+// normalized with BaseAlias then StripTierSuffix; LDAP and OIDC share a mount
+// group (see dedupMountGroup). Records with a blank
 // EntityAliasName or that are PKI clients are ignored. Groups are returned in
 // the order the first member of each group appeared in records.
 func FindAliasDuplicates(records []Record) [][]Record {
@@ -274,10 +279,11 @@ func FindAliasDuplicates(records []Record) [][]Record {
 	return out
 }
 
-// DeduplicateByAlias keeps at most one record per (BaseAlias, source file)
-// combination. The same user authenticating via multiple mount accessors in
-// the same file is collapsed to one record. Records with a blank
-// EntityAliasName or that are PKI clients are always kept.
+// DeduplicateByAlias keeps at most one record per aliasKeyFor key (normalized
+// alias, mount group) across all input files. The same user authenticating via
+// multiple mount accessors, or appearing in several files, is collapsed to the
+// first record in input order. Records with a blank EntityAliasName or that
+// are PKI clients are always kept.
 func DeduplicateByAlias(records []Record) []Record {
 	seen := make(map[aliasKey]struct{}, len(records))
 	out := make([]Record, 0, len(records))
@@ -428,6 +434,14 @@ func effectiveAliasInFile(r Record) string {
 	return r.EntityAliasName
 }
 
+// PerFileAliasKey returns the alias key used by the per-file method dedup
+// functions: the effective alias (entity_alias_metadata.username for OIDC,
+// otherwise entity_alias_name) with everything after '@' removed. Tier
+// suffixes are not stripped.
+func PerFileAliasKey(r Record) string {
+	return BaseAlias(effectiveAliasInFile(r))
+}
+
 // aliasKeyInFileFor computes the per-file dedup key for a record. It applies
 // BaseAlias (strips everything after '@' if present) but not StripTierSuffix,
 // so "alice-t0" and "alice-t1" are treated as distinct identities. The '@'
@@ -444,14 +458,14 @@ func aliasKeyInFileFor(r Record, groupMap map[string]string) (aliasKeyInFile, bo
 		return aliasKeyInFile{}, false
 	}
 	return aliasKeyInFile{
-		base:      BaseAlias(effectiveAliasInFile(r)),
+		base:      PerFileAliasKey(r),
 		mountType: canonical,
 		source:    r.Source,
 	}, true
 }
 
 // FindAliasDuplicatesForMethodsPerFile is like FindAliasDuplicatesForMethods
-// but only collapses records within the same source file. Records in different
+// but only groups records within the same source file. Records in different
 // files with the same alias are not reported as duplicates. Matching uses only
 // the portion of the alias left of '@'; tier suffixes (-t0/-t1/-t2) are not
 // stripped and must match exactly.
@@ -466,7 +480,7 @@ func FindAliasDuplicatesForMethodsPerFile(records []Record, groups [][]string) [
 	var entries []entry
 
 	for _, r := range records {
-		if effectiveAliasInFile(r) == "" || IsPKIClient(r) {
+		if r.EntityAliasName == "" || IsPKIClient(r) {
 			continue
 		}
 		kf, ok := aliasKeyInFileFor(r, groupMap)
@@ -502,7 +516,7 @@ func DeduplicateByAliasForMethodsPerFile(records []Record, groups [][]string) []
 	seen := make(map[aliasKeyInFile]struct{}, len(records))
 	out := make([]Record, 0, len(records))
 	for _, r := range records {
-		if effectiveAliasInFile(r) == "" || IsPKIClient(r) {
+		if r.EntityAliasName == "" || IsPKIClient(r) {
 			out = append(out, r)
 			continue
 		}
@@ -526,15 +540,16 @@ func isJWT(r Record) bool {
 }
 
 // DeduplicateJWT drops JWT records whose normalized alias (StripTierSuffix +
-// BaseAlias) matches a non-JWT record's normalized alias in the same source
-// file. This prevents the same person from being counted once for their LDAP
-// or OIDC identity and again for their JWT identity. Records without an alias
-// are always kept.
+// BaseAlias) matches a non-JWT record's normalized alias in any input file.
+// This prevents the same person from being counted once for their LDAP or OIDC
+// identity and again for their JWT identity. Records without an alias are
+// always kept. PKI clients are ignored: they are never dropped and their
+// aliases (certificate identifiers) are not used for matching.
 func DeduplicateJWT(records []Record) []Record {
 	// Build global set of normalized aliases from all non-JWT records.
 	nonJWTAliases := make(map[string]struct{})
 	for _, r := range records {
-		if isJWT(r) || r.EntityAliasName == "" {
+		if isJWT(r) || r.EntityAliasName == "" || IsPKIClient(r) {
 			continue
 		}
 		norm := StripTierSuffix(BaseAlias(r.EntityAliasName))
@@ -545,7 +560,7 @@ func DeduplicateJWT(records []Record) []Record {
 
 	out := make([]Record, 0, len(records))
 	for _, r := range records {
-		if isJWT(r) && r.EntityAliasName != "" {
+		if isJWT(r) && r.EntityAliasName != "" && !IsPKIClient(r) {
 			norm := StripTierSuffix(BaseAlias(r.EntityAliasName))
 			if _, match := nonJWTAliases[norm]; match {
 				continue

@@ -1,0 +1,24 @@
+
+Summary
+-------
+  Mount Path     Client Type  Count
+  -------------  -----------  -----
+  (no mount)     entity       84624
+                 subtotal:    84624
+
+  auth/approle/  entity       50
+                 subtotal:    50
+
+  auth/cert/     entity       94
+                 subtotal:    94
+
+  auth/jwt/      entity       829
+                 subtotal:    829
+
+  auth/ldap/     entity       558
+                 subtotal:    558
+
+  auth/token/    non-entity   11
+                 subtotal:    11
+  -------------  -----------  -----
+                 TOTAL:       86166
