@@ -1,0 +1,33 @@
+
+Non-PKI Client Summary
+----------------------
+  Mount Path     Client Type  Count
+  -------------  -----------  -----
+  (no mount)     entity       342
+                 subtotal:    342
+
+  auth/approle/  entity       26
+                 subtotal:    26
+
+  auth/jwt/      entity       420
+                 subtotal:    420
+
+  auth/oidc/     entity       324
+                 subtotal:    324
+
+  auth/token/    non-entity   7
+                 subtotal:    7
+  -------------  -----------  -----
+                 TOTAL:       1119
+
+PKI Client Summary
+------------------
+  Mount Path  Client Type  Count
+  ----------  -----------  -----
+  (no mount)  entity       84282
+              subtotal:    84282
+
+  auth/cert/  entity       56315
+              subtotal:    56315
+  ----------  -----------  -----
+              TOTAL:       140597
