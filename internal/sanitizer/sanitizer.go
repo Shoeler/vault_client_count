@@ -294,6 +294,7 @@ type Sanitizer struct {
 	roundTimestamps bool
 	cache           map[cacheKey]string // (category, original) -> pseudonym
 	reverse         map[cacheKey]string // (category, pseudonym) -> original
+	filenames       map[string]string   // input file stem -> output file stem
 
 	// Leak-check state (all lowercased).
 	originalWholes map[string]struct{}
@@ -312,6 +313,7 @@ func New(salt []byte, roundTimestamps bool) (*Sanitizer, error) {
 		roundTimestamps: roundTimestamps,
 		cache:           map[cacheKey]string{},
 		reverse:         map[cacheKey]string{},
+		filenames:       map[string]string{},
 		originalWholes:  map[string]struct{}{},
 		originalTokens:  map[string]struct{}{},
 		generated:       map[string]struct{}{},
@@ -331,6 +333,24 @@ func (s *Sanitizer) digest(category, value string) string {
 	mac := hmac.New(sha256.New, s.salt)
 	mac.Write([]byte(category + "\x00" + value))
 	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// FilenameCategory is the HMAC domain (and mapping category) for output file
+// name pseudonyms.
+const FilenameCategory = "filename"
+
+// Filename returns the pseudonymous output stem for an input file stem (the
+// input's base name without its .csv extension): "export-" followed by the
+// first 12 hex characters of HMAC-SHA256(salt, "filename\x00" + stem). It is
+// case-sensitive. File names are kept out of the leak-check state, so they
+// never change the sanitized content.
+func (s *Sanitizer) Filename(stem string) string {
+	if hit, ok := s.filenames[stem]; ok {
+		return hit
+	}
+	p := "export-" + s.digest(FilenameCategory, stem)[:hexLenShort]
+	s.filenames[stem] = p
+	return p
 }
 
 func (s *Sanitizer) record(category, original, pseudonym string) error {
@@ -598,9 +618,12 @@ type MappingRow struct{ Category, Original, Pseudonym string }
 
 // MappingRows returns every mapping, sorted by (category, original).
 func (s *Sanitizer) MappingRows() []MappingRow {
-	rows := make([]MappingRow, 0, len(s.cache))
+	rows := make([]MappingRow, 0, len(s.cache)+len(s.filenames))
 	for k, p := range s.cache {
 		rows = append(rows, MappingRow{k.category, k.value, p})
+	}
+	for stem, p := range s.filenames {
+		rows = append(rows, MappingRow{FilenameCategory, stem, p})
 	}
 	sort.Slice(rows, func(i, j int) bool {
 		if rows[i].Category != rows[j].Category {

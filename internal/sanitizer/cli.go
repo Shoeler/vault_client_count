@@ -28,6 +28,8 @@ partition, abandoned-client counts and monthly output.
 mount_type, auth_method, client_type and timestamps pass through.
 Unrecognized columns are dropped unless named in --keep-columns.
 Each output is re-scanned for original values before it is kept.
+Output file names derived from input names are pseudonymized too
+(export-<hex>.sanitized.csv) unless --keep-filenames is given.
 
 options:
 `
@@ -37,6 +39,7 @@ examples:
   sanitize-csv export.csv -o export.sanitized.csv
   sanitize-csv jan.csv feb.csv -o out/ --save-salt customer.salt
   sanitize-csv mar.csv -o out/ --salt-file customer.salt
+  sanitize-csv jan.csv -o out/ --keep-filenames
 
 Use the same salt for every file from one customer so values map
 consistently across files. Keep the salt private: anyone holding the
@@ -49,14 +52,15 @@ func Main(args []string, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	var (
 		output, saltFile, saveSalt, mappingOut, keepColumns string
-		roundTS                                             bool
+		roundTS, keepNames                                  bool
 	)
-	fs.StringVar(&output, "o", "", "output directory (files are written as <name>.sanitized.csv),\nor an output file path when there is a single input")
+	fs.StringVar(&output, "o", "", "output directory (files are written as export-<hex>.sanitized.csv,\na keyed pseudonym of the input name), or an output file path\nwhen there is a single input (that name is used as given)")
 	fs.StringVar(&output, "output", "", "same as -o")
 	fs.StringVar(&saltFile, "salt-file", "", "read the secret salt from `PATH` (hex or raw, at least 16 bytes);\nrequired to map several runs consistently")
 	fs.StringVar(&saveSalt, "save-salt", "", "save the generated salt to `PATH` (mode 0600) for later runs")
 	fs.StringVar(&mappingOut, "mapping-out", "", "write a reversible original->pseudonym mapping CSV to `PATH`\n(mode 0600). SENSITIVE: it contains every original value")
 	fs.StringVar(&keepColumns, "keep-columns", "", "comma-separated unrecognized columns `a,b` to pass through unchanged")
+	fs.BoolVar(&keepNames, "keep-filenames", false, "name derived outputs <name>.sanitized.csv after the input file\ninstead of pseudonymizing the name (input names may identify\nthe customer)")
 	fs.BoolVar(&roundTS, "round-timestamps-to-day", false, "truncate parseable timestamps to midnight UTC (month buckets are\nunchanged; --since results can shift by up to one day)")
 	fs.Usage = func() {
 		fmt.Fprint(stderr, usageText)
@@ -109,14 +113,14 @@ func Main(args []string, stderr io.Writer) int {
 		return 2
 	}
 
-	if err := run(inputs, output, saltFile, saveSalt, mappingOut, keepColumns, roundTS, stderr); err != nil {
+	if err := run(inputs, output, saltFile, saveSalt, mappingOut, keepColumns, roundTS, keepNames, stderr); err != nil {
 		fmt.Fprintf(stderr, "error: %s\n", err)
 		return 1
 	}
 	return 0
 }
 
-func run(inputs []string, output, saltFile, saveSalt, mappingOut, keepColumns string, roundTS bool, stderr io.Writer) error {
+func run(inputs []string, output, saltFile, saveSalt, mappingOut, keepColumns string, roundTS, keepNames bool, stderr io.Writer) error {
 	for _, p := range inputs {
 		if st, err := os.Stat(p); err != nil || !st.Mode().IsRegular() {
 			return errorf("input file not found: %s", p)
@@ -136,15 +140,6 @@ func run(inputs []string, output, saltFile, saveSalt, mappingOut, keepColumns st
 		if _, err := rand.Read(salt); err != nil {
 			return err
 		}
-		if saveSalt != "" {
-			if err := writePrivate(saveSalt, []byte(hex.EncodeToString(salt)+"\n")); err != nil {
-				return err
-			}
-			fmt.Fprintf(stderr, "salt saved to %s (mode 0600); keep it secret\n", saveSalt)
-		} else if len(inputs) == 1 {
-			fmt.Fprint(stderr, "note: a random salt was used; pass --save-salt to sanitize "+
-				"other files from this customer consistently later\n")
-		}
 	}
 	keepExtra := map[string]bool{}
 	for _, name := range strings.Split(keepColumns, ",") {
@@ -160,29 +155,34 @@ func run(inputs []string, output, saltFile, saveSalt, mappingOut, keepColumns st
 		keepExtra[name] = true
 	}
 
-	outputs, err := outputPaths(inputs, output)
-	if err != nil {
-		return err
-	}
-	inReal := map[string]bool{}
-	for _, p := range inputs {
-		inReal[realpath(p)] = true
-	}
-	outReal := map[string]bool{}
-	for _, o := range outputs {
-		r := realpath(o)
-		if inReal[r] {
-			return errorf("output %s would overwrite an input file", o)
-		}
-		outReal[r] = true
-	}
-	if len(outReal) != len(outputs) {
-		return errorf("two inputs share a base name; their outputs would collide")
-	}
-
 	s, err := New(salt, roundTS)
 	if err != nil {
 		return err
+	}
+	// Output paths and every check on them come before anything is written.
+	outputs, derived := outputPaths(inputs, output, s, keepNames)
+	if err := checkCollisions(inputs, outputs, [][2]string{
+		{"--save-salt", saveSalt},
+		{"--mapping-out", mappingOut},
+	}); err != nil {
+		return err
+	}
+
+	if saltFile == "" {
+		if saveSalt != "" {
+			if err := writePrivate(saveSalt, []byte(hex.EncodeToString(salt)+"\n")); err != nil {
+				return err
+			}
+			fmt.Fprintf(stderr, "salt saved to %s (mode 0600); keep it secret\n", saveSalt)
+		} else if len(inputs) == 1 {
+			fmt.Fprint(stderr, "note: a random salt was used; pass --save-salt to sanitize "+
+				"other files from this customer consistently later\n")
+		}
+	}
+	if derived {
+		if err := os.MkdirAll(output, 0o777); err != nil {
+			return err
+		}
 	}
 	for i, in := range inputs {
 		if _, err := SanitizeFile(s, in, outputs[i], keepExtra, stderr); err != nil {
@@ -290,23 +290,33 @@ func loadSalt(path string, stderr io.Writer) ([]byte, error) {
 	return salt, nil
 }
 
-func outputPaths(inputs []string, out string) ([]string, error) {
-	if st, err := os.Stat(out); len(inputs) == 1 && !(err == nil && st.IsDir()) && !strings.HasSuffix(out, string(os.PathSeparator)) {
-		return []string{out}, nil
+// fileStem is the input's base name without a trailing .csv (any case).
+func fileStem(p string) string {
+	base := filepath.Base(p)
+	if strings.HasSuffix(strings.ToLower(base), ".csv") {
+		return base[:len(base)-4]
 	}
-	if err := os.MkdirAll(out, 0o777); err != nil {
-		return nil, err
+	return base
+}
+
+// outputPaths returns the output path for each input, and whether they were
+// derived from the input names (out is a directory, or there are several
+// inputs) rather than given explicitly as a single output file. Derived names
+// are export-<hex>.sanitized.csv (see Sanitizer.Filename), or
+// <stem>.sanitized.csv with keepNames. It does not create the directory.
+func outputPaths(inputs []string, out string, s *Sanitizer, keepNames bool) ([]string, bool) {
+	if st, err := os.Stat(out); len(inputs) == 1 && !(err == nil && st.IsDir()) && !strings.HasSuffix(out, string(os.PathSeparator)) {
+		return []string{out}, false
 	}
 	paths := make([]string, 0, len(inputs))
 	for _, p := range inputs {
-		base := filepath.Base(p)
-		stem := base
-		if strings.HasSuffix(strings.ToLower(base), ".csv") {
-			stem = base[:len(base)-4]
+		stem := fileStem(p)
+		if !keepNames {
+			stem = s.Filename(stem)
 		}
 		paths = append(paths, filepath.Join(out, stem+".sanitized.csv"))
 	}
-	return paths, nil
+	return paths, true
 }
 
 // realpath resolves symlinks in the longest existing prefix of p, like
@@ -329,4 +339,105 @@ func realpath(p string) string {
 		tail = append(tail, filepath.Base(cur))
 		cur = parent
 	}
+}
+
+// Collision checks. Two paths name the same file when their resolved forms
+// (realpath) are equal, when both exist and os.SameFile says so (hard links,
+// or a case variant of an existing file on a case-insensitive filesystem), or
+// when the resolved forms differ only by case and the filesystem holding them
+// folds case (macOS and Windows defaults). The last rule covers targets that
+// do not exist yet, such as two derived outputs. Case-insensitivity is probed
+// read-only: take the deepest existing component of the resolved path whose
+// name has an ASCII letter, swap the case of its ASCII letters, and see
+// whether that name is the same file. Nothing is created. Case is folded with
+// strings.ToLower (str.lower in the Python port). scripts/sanitize_csv.py
+// implements the same rules; keep them identical.
+
+func asciiSwapCase(name string) string {
+	b := []byte(name)
+	for i, c := range b {
+		switch {
+		case c >= 'A' && c <= 'Z':
+			b[i] = c + ('a' - 'A')
+		case c >= 'a' && c <= 'z':
+			b[i] = c - ('a' - 'A')
+		}
+	}
+	return string(b)
+}
+
+// caseInsensitiveFS reports whether the filesystem holding the resolved path
+// p folds case.
+func caseInsensitiveFS(p string) bool {
+	for {
+		name, parent := filepath.Base(p), filepath.Dir(p)
+		if swapped := asciiSwapCase(name); swapped != name {
+			if st, err := os.Stat(p); err == nil {
+				st2, err := os.Stat(filepath.Join(parent, swapped))
+				return err == nil && os.SameFile(st, st2)
+			}
+		}
+		if parent == p {
+			return false
+		}
+		p = parent
+	}
+}
+
+// sameFile reports whether paths a and b name the same file (see above).
+func sameFile(a, b string) bool {
+	ra, rb := realpath(a), realpath(b)
+	if ra == rb {
+		return true
+	}
+	if sa, err := os.Stat(ra); err == nil {
+		if sb, err := os.Stat(rb); err == nil && os.SameFile(sa, sb) {
+			return true
+		}
+	}
+	return strings.ToLower(ra) == strings.ToLower(rb) && caseInsensitiveFS(ra)
+}
+
+// checkCollisions rejects any write target that names an input or another
+// target. extras holds {flag, path} for --save-salt and --mapping-out; empty
+// paths are skipped. It runs before anything is written.
+func checkCollisions(inputs, outputs []string, extras [][2]string) error {
+	for i, o := range outputs {
+		for _, p := range inputs {
+			if sameFile(o, p) {
+				return errorf("output %s would overwrite an input file", o)
+			}
+		}
+		for j := 0; j < i; j++ {
+			if sameFile(o, outputs[j]) {
+				return errorf("inputs %s and %s would both be written to %s; "+
+					"rename one or sanitize them in separate runs", inputs[j], inputs[i], o)
+			}
+		}
+	}
+	var set [][2]string
+	for _, e := range extras {
+		if e[1] != "" {
+			set = append(set, e)
+		}
+	}
+	for k, e := range set {
+		flag, path := e[0], e[1]
+		for _, p := range inputs {
+			if sameFile(path, p) {
+				return errorf("%s %s is the same file as input %s", flag, path, p)
+			}
+		}
+		for _, o := range outputs {
+			if sameFile(path, o) {
+				return errorf("%s %s is the same file as output %s", flag, path, o)
+			}
+		}
+		for _, e2 := range set[:k] {
+			if sameFile(path, e2[1]) {
+				return errorf("%s %s and %s %s are the same file", e2[0], e2[1], flag, path)
+			}
+		}
+	}
+	return nil
 }

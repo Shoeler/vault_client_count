@@ -225,7 +225,7 @@ class SanitizeTests(unittest.TestCase):
         old = sys.stderr
         sys.stderr = err
         try:
-            rc = sc.main([src, "-o", out + os.sep, "--save-salt", salt, "--mapping-out", mapping])
+            rc = sc.main([src, "-o", out + os.sep, "--save-salt", salt, "--mapping-out", mapping, "--keep-filenames"])
             rc2 = sc.main([os.path.join(self.dir, "missing.csv"), "-o", out])
         finally:
             sys.stderr = old
@@ -236,6 +236,294 @@ class SanitizeTests(unittest.TestCase):
         self.assertEqual(os.stat(mapping).st_mode & 0o777, 0o600)
         self.assertIn("WARNING", err.getvalue())
 
+
+class FilenameTests(unittest.TestCase):
+    """Output file name pseudonyms. Known-answer values are shared with
+    internal/sanitizer/filename_test.go so the two ports stay in step."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = self.tmp.name
+        self.salt = os.path.join(self.dir, "salt.hex")
+        with open(self.salt, "w") as f:
+            f.write(SALT_A.hex() + "\n")
+        os.chmod(self.salt, 0o600)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def main(self, argv):
+        err = io.StringIO()
+        old = sys.stderr
+        sys.stderr = err
+        try:
+            rc = sc.main(argv)
+        finally:
+            sys.stderr = old
+        return rc, err.getvalue()
+
+    def filename_rows(self, mapping):
+        with open(mapping, newline="") as f:
+            return [r for r in csv.reader(f) if r and r[0] == "filename"]
+
+    def test_filename_pseudonym(self):
+        import hashlib
+        import hmac
+        s = sc.Sanitizer(SALT_A)
+        want = "export-" + hmac.new(SALT_A, b"filename\x00acme-export", hashlib.sha256).hexdigest()[:12]
+        self.assertEqual(s.filename("acme-export"), want)
+        self.assertEqual(want, "export-9e4ebd54df0c")
+        self.assertEqual(s.filename("Acme-Export"), "export-25d317be975f")  # case-sensitive
+        self.assertNotEqual(sc.Sanitizer(SALT_B).filename("acme-export"), want)
+        self.assertEqual(s.original_wholes, set())
+        self.assertEqual(s.original_tokens, set())
+
+    def test_derived_names_pseudonymized(self):
+        a = os.path.join(self.dir, "acme-export.csv")
+        b = os.path.join(self.dir, "x.CSV")
+        write(a)
+        write(b)
+        out = os.path.join(self.dir, "out")
+        keep = os.path.join(self.dir, "keep")
+        mapping = os.path.join(self.dir, "map.csv")
+        rc, err = self.main([a, b, "-o", out, "--salt-file", self.salt, "--mapping-out", mapping])
+        self.assertEqual(rc, 0, err)
+        want = ["export-9e4ebd54df0c.sanitized.csv", "export-daa4318cd009.sanitized.csv"]
+        self.assertEqual(sorted(os.listdir(out)), want)
+        self.assertIn(a + " -> " + os.path.join(out, want[0]) + ": 11 data rows", err)
+        rc, err = self.main([a, b, "-o", keep, "--salt-file", self.salt, "--keep-filenames"])
+        self.assertEqual(rc, 0, err)
+        for p, k in zip(want, ["acme-export.sanitized.csv", "x.sanitized.csv"]):
+            with open(os.path.join(out, p), "rb") as f1, open(os.path.join(keep, k), "rb") as f2:
+                self.assertEqual(f1.read(), f2.read())
+        self.assertEqual(self.filename_rows(mapping), [
+            ["filename", "acme-export", "export-9e4ebd54df0c"],
+            ["filename", "x", "export-daa4318cd009"],
+        ])
+
+    def test_single_input_to_directory_pseudonymized(self):
+        src = os.path.join(self.dir, "acme-export.csv")
+        write(src)
+        out = os.path.join(self.dir, "out")
+        rc, err = self.main([src, "-o", out + os.sep, "--salt-file", self.salt])
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(os.listdir(out), ["export-9e4ebd54df0c.sanitized.csv"])
+
+    def test_explicit_output_file_name_kept(self):
+        src = os.path.join(self.dir, "acme-export.csv")
+        write(src)
+        dst = os.path.join(self.dir, "my-choice.csv")
+        mapping = os.path.join(self.dir, "map.csv")
+        rc, err = self.main([src, "-o", dst, "--salt-file", self.salt, "--mapping-out", mapping])
+        self.assertEqual(rc, 0, err)
+        self.assertTrue(os.path.isfile(dst))
+        self.assertEqual(self.filename_rows(mapping), [])
+
+    def test_keep_filenames(self):
+        a = os.path.join(self.dir, "acme-export.csv")
+        b = os.path.join(self.dir, "x.CSV")
+        write(a)
+        write(b)
+        out = os.path.join(self.dir, "out")
+        mapping = os.path.join(self.dir, "map.csv")
+        rc, err = self.main([a, b, "-o", out, "--salt-file", self.salt, "--keep-filenames",
+                             "--mapping-out", mapping])
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(sorted(os.listdir(out)), ["acme-export.sanitized.csv", "x.sanitized.csv"])
+        self.assertEqual(self.filename_rows(mapping), [])
+
+    def test_output_name_collision(self):
+        for extra in ([], ["--keep-filenames"]):
+            with self.subTest(extra=extra):
+                base = tempfile.mkdtemp(dir=self.dir)
+                a = os.path.join(base, "a", "same.csv")
+                b = os.path.join(base, "b", "same.csv")
+                for p in (a, b):
+                    os.makedirs(os.path.dirname(p))
+                    write(p)
+                out = os.path.join(base, "out")
+                saved = os.path.join(base, "saved.salt")
+                mapping = os.path.join(base, "map.csv")
+                rc, err = self.main([a, b, "-o", out, "--save-salt", saved,
+                                     "--mapping-out", mapping] + extra)
+                self.assertEqual(rc, 1)
+                self.assertIn(a, err)
+                self.assertIn(b, err)
+                for p in (out, saved, mapping):
+                    self.assertFalse(os.path.exists(p), p)
+
+
+
+def fs_is_case_insensitive(directory):
+    """Whether directory's filesystem folds case, via a probe file that is
+    independent of the code under test."""
+    p = os.path.join(directory, "CaseProbe")
+    open(p, "w").close()
+    try:
+        return os.path.exists(os.path.join(directory, "caseprobe"))
+    finally:
+        os.remove(p)
+
+
+class CollisionTests(unittest.TestCase):
+    """Write-target collision checks, salt validation and CLI exit codes.
+    Mirrors internal/sanitizer/collision_test.go so the two ports stay in step."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = self.tmp.name
+        self.src = os.path.join(self.dir, "jan.csv")
+        write(self.src)
+        with open(self.src, "rb") as f:
+            self.src_bytes = f.read()
+        self.out = os.path.join(self.dir, "out")
+        self.saved = os.path.join(self.dir, "saved.salt")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def main(self, argv):
+        err = io.StringIO()
+        old = sys.stderr
+        sys.stderr = err
+        try:
+            rc = sc.main(argv)
+        finally:
+            sys.stderr = old
+        return rc, err.getvalue()
+
+    def assert_rejected(self, argv, mention=(), absent=()):
+        rc, err = self.main(argv)
+        self.assertEqual(rc, 1, err)
+        self.assertIn("error: ", err)
+        for m in mention:
+            self.assertIn(m, err)
+        for p in absent:
+            self.assertFalse(os.path.exists(p), "%s was written despite the error" % p)
+
+    def assert_src_unchanged(self):
+        with open(self.src, "rb") as f:
+            self.assertEqual(f.read(), self.src_bytes)
+
+    def write_salt(self, content, name="salt.hex"):
+        p = os.path.join(self.dir, name)
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(content)
+        os.chmod(p, 0o600)
+        return p
+
+    def test_mapping_out_equals_input(self):
+        self.assert_rejected(
+            [self.src, "-o", self.out + os.sep, "--save-salt", self.saved, "--mapping-out", self.src],
+            ["--mapping-out", self.src, "input"], [self.out, self.saved])
+        self.assert_src_unchanged()
+
+    def test_mapping_out_equals_output(self):
+        shared = os.path.join(self.dir, "shared.csv")
+        self.assert_rejected(
+            [self.src, "-o", shared, "--save-salt", self.saved, "--mapping-out", shared],
+            ["--mapping-out", shared, "output"], [shared, self.saved])
+        # Derived output name inside a directory, reached by a different spelling.
+        salt = self.write_salt(SALT_A.hex() + "\n")
+        src2 = os.path.join(self.dir, "acme-export.csv")
+        write(src2)
+        name = "export-9e4ebd54df0c.sanitized.csv"
+        alias = self.out + os.sep + "." + os.sep + name
+        self.assert_rejected(
+            [src2, "-o", self.out + os.sep, "--salt-file", salt, "--mapping-out", alias],
+            ["--mapping-out", os.path.join(self.out + os.sep, name)], [self.out])
+
+    def test_save_salt_equals_input(self):
+        mapping = os.path.join(self.dir, "jan.mapping.csv")
+        self.assert_rejected(
+            [self.src, "-o", self.out + os.sep, "--save-salt", self.src, "--mapping-out", mapping],
+            ["--save-salt", self.src, "input"], [self.out, mapping])
+        self.assert_src_unchanged()
+
+    def test_mapping_out_equals_save_salt(self):
+        both = os.path.join(self.dir, "both.salt")
+        self.assert_rejected(
+            [self.src, "-o", self.out + os.sep, "--save-salt", both, "--mapping-out", both],
+            ["--save-salt " + both, "--mapping-out " + both], [self.out, both])
+
+    def test_case_only_collision(self):
+        if not fs_is_case_insensitive(self.dir):
+            self.skipTest("filesystem is case-sensitive")
+        upper = os.path.join(self.dir, "JAN.csv")
+        self.assert_rejected([self.src, "-o", upper, "--save-salt", self.saved],
+                             [upper, "input"], [self.saved])
+        self.assert_src_unchanged()
+        a = os.path.join(self.dir, "a", "Jan.csv")
+        b = os.path.join(self.dir, "b", "jan.csv")
+        for p in (a, b):
+            os.makedirs(os.path.dirname(p))
+            write(p)
+        self.assert_rejected([a, b, "-o", self.out, "--keep-filenames", "--save-salt", self.saved],
+                             [a, b], [self.out, self.saved])
+        x = os.path.join(self.dir, "x.csv")
+        self.assert_rejected(
+            [self.src, "-o", x, "--save-salt", self.saved, "--mapping-out", os.path.join(self.dir, "X.csv")],
+            ["--mapping-out", x], [x, self.saved])
+
+    def test_case_insensitive_fs_probe_agrees_with_os(self):
+        r = os.path.realpath(self.dir)
+        self.assertEqual(sc._case_insensitive_fs(os.path.join(r, "missing", "file.csv")),
+                         fs_is_case_insensitive(self.dir))
+
+    def test_load_salt_edge_cases(self):
+        want16 = bytes.fromhex("00112233445566778899aabbccddeeff")
+        cases = [
+            ("short hex", "00112233445566778899aabbccddee\n", None),
+            ("short raw", "not-hex-short\n", None),
+            ("raw 16+ non-hex", "this is not hex at all!\n", b"this is not hex at all!"),
+            ("whitespace between hex pairs", "0011 2233\t4455 6677\n8899 aabb ccdd eeff\n", want16),
+            ("whitespace splitting a pair is raw", "001 122334455667788 99aabbccddeeff",
+             b"001 122334455667788 99aabbccddeeff"),
+            ("odd-length hex is raw", "00112233445566778899aabbccddeeff0",
+             b"00112233445566778899aabbccddeeff0"),
+            ("uppercase hex", "  00112233445566778899AABBCCDDEEFF  \n", want16),
+            ("non-ascii raw", "s\u00e4lzchen-s\u00e4lzchen", "s\u00e4lzchen-s\u00e4lzchen".encode("utf-8")),
+        ]
+        for i, (name, content, want) in enumerate(cases):
+            with self.subTest(name=name):
+                p = self.write_salt(content, "salt%d" % i)
+                if want is None:
+                    with self.assertRaises(sc.SanitizeError) as cm:
+                        sc.load_salt(p)
+                    self.assertIn("at least 16 bytes", str(cm.exception))
+                else:
+                    self.assertEqual(sc.load_salt(p), want)
+
+    def test_short_salt_rejected(self):
+        salt = self.write_salt(bytes(8).hex(), "short.salt")
+        self.assert_rejected([self.src, "-o", self.out + os.sep, "--salt-file", salt],
+                             [salt, "at least 16 bytes"], [self.out])
+
+    def test_save_salt_with_salt_file(self):
+        salt = self.write_salt(SALT_A.hex() + "\n")
+        self.assert_rejected(
+            [self.src, "-o", self.out + os.sep, "--salt-file", salt, "--save-salt", self.saved],
+            ["--save-salt is only valid"], [self.out, self.saved])
+
+    def test_missing_required_args_exit_2(self):
+        for argv, want in (
+            ([self.src], "required: -o/--output"),
+            (["-o", self.out], "required: INPUT.csv"),
+            ([], "required: INPUT.csv, -o/--output"),
+            ([self.src, "--no-such-flag", "-o", self.out], "no-such-flag"),
+        ):
+            with self.subTest(argv=argv):
+                err = io.StringIO()
+                old = sys.stderr
+                sys.stderr = err
+                try:
+                    with self.assertRaises(SystemExit) as cm:
+                        sc.main(argv)
+                finally:
+                    sys.stderr = old
+                self.assertEqual(cm.exception.code, 2)
+                self.assertIn(want, err.getvalue())
+        self.assertFalse(os.path.exists(self.out))
 
 if __name__ == "__main__":
     unittest.main()

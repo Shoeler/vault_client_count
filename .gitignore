@@ -49,4 +49,5 @@ credentials.tfrc.json
 *.tfvars
 .terraform/
 *.salt
-testdata/*.map
+*mapping*.csv
+*.map

@@ -28,17 +28,49 @@ python3 scripts/sanitize_csv.py jan.csv feb.csv -o out/ --save-salt customer.sal
 
 # A later file from the same customer, mapped consistently with the first run
 python3 scripts/sanitize_csv.py mar.csv -o out/ --salt-file customer.salt
+
+# Keep the original file names (only when they reveal nothing about the customer)
+python3 scripts/sanitize_csv.py jan.csv feb.csv -o out/ --keep-filenames
+
+# Also write the reversible mapping (sensitive; keep it out of out/)
+python3 scripts/sanitize_csv.py jan.csv -o out/ --salt-file customer.salt --mapping-out customer.mapping.csv
 ```
 
-With a directory as `-o` (or more than one input), each output is written as
-`<name>.sanitized.csv`.
+Name mapping files `<something>.mapping.csv`. `.gitignore` ignores
+`*mapping*.csv`, `*.map` and `*.salt` anywhere in the repository, so files named
+that way cannot be committed by accident.
+
+With a directory as `-o` (or more than one input), file names are
+pseudonymized too, because export names often carry cluster or customer
+identifiers: each output is written as `export-<hex>.sanitized.csv`, where
+`<hex>` is the first 12 hex characters of
+`HMAC-SHA256(salt, "filename" + "\x00" + <stem>)` and `<stem>` is the input's
+base name without its `.csv` extension (case-sensitive, so `Jan.csv` and
+`jan.csv` get different names). The same salt always gives the same name, so
+re-running with `--salt-file` overwrites the earlier output. The stderr progress
+line (`jan.csv -> out/export-<hex>.sanitized.csv: ...`) shows which input
+became which output. With `--keep-filenames` the old `<stem>.sanitized.csv`
+names are used. An explicit output file (`-o file.csv` with a single input) is
+always used as given.
+
+If two inputs would be written to the same output (the same base name from
+different directories, with or without `--keep-filenames`), the script exits
+non-zero naming both inputs, before writing anything. Likewise, an output,
+`--save-salt` or `--mapping-out` path that names an input file, an output file,
+or each other is rejected, naming both paths, before the output directory or
+salt file is created. Paths are compared after resolving symlinks, as the same
+file when both exist (hard links), and case-insensitively when the filesystem
+folds case (detected at run time, as on macOS by default), so `-o JAN.csv` for
+input `jan.csv`, or `a/Jan.csv` and `b/jan.csv` with `--keep-filenames`, are
+caught there.
 
 | Option | Purpose |
 |---|---|
-| `--salt-file PATH` | Read the secret salt (hex, at least 16 bytes). Needed to map files from separate runs consistently. |
+| `--salt-file PATH` | Read the secret salt (hex, or raw bytes if not valid hex; at least 16 bytes). Needed to map files from separate runs consistently. |
 | `--save-salt PATH` | Save the randomly generated salt (mode 0600). |
-| `--mapping-out PATH` | Write an original-to-pseudonym mapping (mode 0600). **Sensitive**: it contains every original identifier. Off by default. |
+| `--mapping-out PATH` | Write an original-to-pseudonym mapping (mode 0600). **Sensitive**: it contains every original identifier, including one `filename,<stem>,export-<hex>` row per renamed output file. Off by default. |
 | `--keep-columns a,b` | Pass the named unrecognized columns through unchanged. |
+| `--keep-filenames` | Name derived outputs `<stem>.sanitized.csv` after the input instead of `export-<hex>.sanitized.csv`. |
 | `--round-timestamps-to-day` | Truncate parseable timestamps to midnight UTC. |
 
 The script exits non-zero with a message on bad input (missing file, no
@@ -103,6 +135,31 @@ contain:
   a UUID subject.
 * Columns passed with `--keep-columns` are not pseudonymized; the leak check
   fails if they share values with pseudonymized columns.
+* **File names** are pseudonymized (`export-<hex>.sanitized.csv`) unless
+  `--keep-filenames` is used or you name the output file yourself with `-o`.
+  The number of files and their sizes are still visible.
+
+### Migrating the test fixtures to pseudonymized names
+
+The fixtures `testdata/vault*.sanitized.csv` predate file name
+pseudonymization. To rename them, re-run the sanitizer with the saved customer
+salt (the content does not change, only the names), delete the old files, then
+regenerate the golden files, which are keyed by fixture name and also deleted
+for the old names:
+
+```bash
+python3 scripts/sanitize_csv.py testdata/real/*.csv --salt-file testdata/real/customer.salt -o testdata/ && rm testdata/vault*.sanitized.csv
+go test ./cmd/vault-csv-normalizer -run TestGoldenCounts -update
+```
+
+`testdata/real/*.csv` stands for the original exports that produced the
+current fixtures; list them explicitly if that directory holds other CSVs. The
+new fixtures are named `export-<hex>.sanitized.csv`, so the `rm` only removes
+the old names.
+
+Until `-update` is run, `TestGoldenCounts` fails and lists the stale golden
+files. Check the new goldens with `git diff` before committing: only the
+file names in the output should differ, not the counts.
 
 ### Tests
 

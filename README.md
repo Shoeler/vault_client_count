@@ -481,3 +481,10 @@ make build
 # Clean
 make clean
 ```
+
+### Golden-file counts test
+
+`TestGoldenCounts` runs the CLI (`base`, `-p`, `-d`, `-d -p`) on each `testdata/*.sanitized.csv` and all together, comparing stdout byte-for-byte with `testdata/golden/*.txt`.
+The sanitized fixtures are pseudonymized customer exports; it skips if none are present, without checking or changing the goldens.
+A fixture without a golden fails, and so does a stale `testdata/golden/*.txt` with no fixture (`-update` deletes stale `*.txt` goldens and leaves other files alone).
+After confirming a count change is intended, regenerate with `go test ./cmd/vault-csv-normalizer -run TestGoldenCounts -update` and review the golden diff.

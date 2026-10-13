@@ -119,6 +119,9 @@ LEAK_MIN_LEN = 4
 HEX_LEN_LONG = 16
 HEX_LEN_SHORT = 12
 
+# HMAC domain (and mapping category) for output file name pseudonyms.
+FILENAME_CATEGORY = "filename"
+
 
 class SanitizeError(Exception):
     """Raised for bad input or a failed safety check."""
@@ -200,6 +203,7 @@ class Sanitizer:
         self.round_timestamps = round_timestamps
         self._cache = {}       # (category, original) -> pseudonym
         self._reverse = {}     # (category, pseudonym) -> original
+        self._filenames = {}   # input file stem -> output file stem
         # Leak-check state (all lowercased).
         self.original_wholes = set()
         self.original_tokens = set()
@@ -212,6 +216,21 @@ class Sanitizer:
     def _digest(self, category, value):
         msg = (category + "\x00" + value).encode("utf-8", "surrogateescape")
         return hmac.new(self._salt, msg, hashlib.sha256).hexdigest()
+
+    def filename(self, stem):
+        """Pseudonymous output stem for an input file stem.
+
+        The stem is the input's base name without its .csv extension. The
+        result is "export-" plus the first 12 hex characters of
+        HMAC-SHA256(salt, "filename\\x00" + stem); it is case-sensitive. File
+        names are kept out of the leak-check state, so they never change the
+        sanitized content.
+        """
+        hit = self._filenames.get(stem)
+        if hit is None:
+            hit = "export-" + self._digest(FILENAME_CATEGORY, stem)[:HEX_LEN_SHORT]
+            self._filenames[stem] = hit
+        return hit
 
     def _record(self, category, original, pseudonym):
         prev = self._reverse.get((category, pseudonym))
@@ -383,7 +402,9 @@ class Sanitizer:
         return getattr(self, policy)(v)
 
     def mapping_rows(self):
-        for (category, original), pseudonym in sorted(self._cache.items()):
+        items = list(self._cache.items())
+        items.extend(((FILENAME_CATEGORY, stem), p) for stem, p in self._filenames.items())
+        for (category, original), pseudonym in sorted(items):
             yield category, original, pseudonym
 
 
@@ -596,16 +617,109 @@ def save_salt(path, salt):
         f.write(salt.hex() + "\n")
 
 
-def output_paths(inputs, out):
+def file_stem(path):
+    """The input's base name without a trailing .csv (any case)."""
+    base = os.path.basename(path)
+    return base[:-4] if base.lower().endswith(".csv") else base
+
+
+def output_paths(inputs, out, sanitizer, keep_names=False):
+    """Return (output paths, derived).
+
+    derived is False when out is an explicit single output file, whose name is
+    used as given. Otherwise names are derived from the inputs:
+    export-<hex>.sanitized.csv (see Sanitizer.filename), or
+    <stem>.sanitized.csv with keep_names. The directory is not created here.
+    """
     if len(inputs) == 1 and not os.path.isdir(out) and not out.endswith(os.sep):
-        return [out]
-    os.makedirs(out, exist_ok=True)
+        return [out], False
     paths = []
     for p in inputs:
-        base = os.path.basename(p)
-        stem = base[:-4] if base.lower().endswith(".csv") else base
+        stem = file_stem(p)
+        if not keep_names:
+            stem = sanitizer.filename(stem)
         paths.append(os.path.join(out, stem + ".sanitized.csv"))
-    return paths
+    return paths, True
+
+
+# Collision checks. Two paths name the same file when their resolved forms
+# (os.path.realpath) are equal, when both exist and os.path.samefile says so
+# (hard links, or a case variant of an existing file on a case-insensitive
+# filesystem), or when the resolved forms differ only by case and the
+# filesystem holding them folds case (macOS and Windows defaults). The last
+# rule covers targets that do not exist yet, such as two derived outputs.
+# Case-insensitivity is probed read-only: take the deepest existing component
+# of the resolved path whose name has an ASCII letter, swap the case of its
+# ASCII letters, and see whether that name is the same file. Nothing is
+# created. Case is folded with str.lower (strings.ToLower in the Go port).
+# internal/sanitizer/cli.go implements the same rules; keep them identical.
+
+
+def _ascii_swapcase(name):
+    return "".join(
+        c.lower() if "A" <= c <= "Z" else c.upper() if "a" <= c <= "z" else c
+        for c in name
+    )
+
+
+def _case_insensitive_fs(path):
+    """Whether the filesystem holding resolved path p folds case."""
+    p = path
+    while True:
+        name = os.path.basename(p)
+        parent = os.path.dirname(p)
+        swapped = _ascii_swapcase(name)
+        if swapped != name and os.path.exists(p):
+            try:
+                return os.path.samefile(p, os.path.join(parent, swapped))
+            except OSError:
+                return False
+        if parent == p:
+            return False
+        p = parent
+
+
+def same_file(a, b):
+    """Whether paths a and b name the same file (see the rules above)."""
+    ra, rb = os.path.realpath(a), os.path.realpath(b)
+    if ra == rb:
+        return True
+    try:
+        if os.path.samefile(ra, rb):
+            return True
+    except OSError:
+        pass
+    return ra.lower() == rb.lower() and _case_insensitive_fs(ra)
+
+
+def check_collisions(inputs, outputs, extras):
+    """Reject any write target that names an input or another target.
+
+    extras is a list of (flag, path) for --save-salt and --mapping-out; unset
+    entries are skipped. Raises SanitizeError before anything is written.
+    """
+    for i, o in enumerate(outputs):
+        for p in inputs:
+            if same_file(o, p):
+                raise SanitizeError("output %s would overwrite an input file" % o)
+        for j in range(i):
+            if same_file(o, outputs[j]):
+                raise SanitizeError(
+                    "inputs %s and %s would both be written to %s; rename one or "
+                    "sanitize them in separate runs" % (inputs[j], inputs[i], o)
+                )
+    extras = [(flag, path) for flag, path in extras if path]
+    for k, (flag, path) in enumerate(extras):
+        for p in inputs:
+            if same_file(path, p):
+                raise SanitizeError("%s %s is the same file as input %s" % (flag, path, p))
+        for o in outputs:
+            if same_file(path, o):
+                raise SanitizeError("%s %s is the same file as output %s" % (flag, path, o))
+        for flag2, path2 in extras[:k]:
+            if same_file(path, path2):
+                raise SanitizeError("%s %s and %s %s are the same file"
+                                    % (flag2, path2, flag, path))
 
 
 def build_arg_parser():
@@ -623,13 +737,16 @@ def build_arg_parser():
             "partition, abandoned-client counts and monthly output.\n\n"
             "mount_type, auth_method, client_type and timestamps pass through.\n"
             "Unrecognized columns are dropped unless named in --keep-columns.\n"
-            "Each output is re-scanned for original values before it is kept."
+            "Each output is re-scanned for original values before it is kept.\n"
+            "Output file names derived from input names are pseudonymized too\n"
+            "(export-<hex>.sanitized.csv) unless --keep-filenames is given."
         ),
         epilog=(
             "examples:\n"
             "  sanitize_csv.py export.csv -o export.sanitized.csv\n"
             "  sanitize_csv.py jan.csv feb.csv -o out/ --save-salt customer.salt\n"
-            "  sanitize_csv.py mar.csv -o out/ --salt-file customer.salt\n\n"
+            "  sanitize_csv.py mar.csv -o out/ --salt-file customer.salt\n"
+            "  sanitize_csv.py jan.csv -o out/ --keep-filenames\n\n"
             "Use the same salt for every file from one customer so values map\n"
             "consistently across files. Keep the salt secret: anyone holding the\n"
             "salt can confirm guesses of original values."
@@ -637,8 +754,9 @@ def build_arg_parser():
     )
     p.add_argument("inputs", nargs="+", metavar="INPUT.csv", help="Vault client export CSV file(s)")
     p.add_argument("-o", "--output", required=True, metavar="OUTPUT",
-                   help="output directory (files are written as <name>.sanitized.csv), "
-                        "or an output file path when there is a single input")
+                   help="output directory (files are written as export-<hex>.sanitized.csv, "
+                        "a keyed pseudonym of the input name), or an output file path "
+                        "when there is a single input (that name is used as given)")
     p.add_argument("--salt-file", metavar="PATH",
                    help="read the secret salt from PATH (hex or raw, at least 16 bytes); "
                         "required to map several runs consistently")
@@ -649,6 +767,10 @@ def build_arg_parser():
                         "(mode 0600). SENSITIVE: it contains every original value")
     p.add_argument("--keep-columns", metavar="a,b", default="",
                    help="comma-separated unrecognized columns to pass through unchanged")
+    p.add_argument("--keep-filenames", action="store_true",
+                   help="name derived outputs <name>.sanitized.csv after the input file "
+                        "instead of pseudonymizing the name (input names may identify "
+                        "the customer)")
     p.add_argument("--round-timestamps-to-day", action="store_true",
                    help="truncate parseable timestamps to midnight UTC (month buckets are "
                         "unchanged; --since results can shift by up to one day)")
@@ -666,13 +788,6 @@ def main(argv=None):
             raise SanitizeError("--save-salt is only valid when the salt is generated "
                                 "(without --salt-file)")
         salt = load_salt(args.salt_file) if args.salt_file else secrets.token_bytes(32)
-        if not args.salt_file:
-            if args.save_salt:
-                save_salt(args.save_salt, salt)
-                sys.stderr.write("salt saved to %s (mode 0600); keep it secret\n" % args.save_salt)
-            elif len(args.inputs) == 1:
-                sys.stderr.write("note: a random salt was used; pass --save-salt to sanitize "
-                                 "other files from this customer consistently later\n")
         keep_extra = set()
         for name in args.keep_columns.split(","):
             name = name.strip().lower()
@@ -684,15 +799,23 @@ def main(argv=None):
                 continue
             keep_extra.add(name)
 
-        outputs = output_paths(args.inputs, args.output)
-        in_real = {os.path.realpath(p) for p in args.inputs}
-        for o in outputs:
-            if os.path.realpath(o) in in_real:
-                raise SanitizeError("output %s would overwrite an input file" % o)
-        if len(set(map(os.path.realpath, outputs))) != len(outputs):
-            raise SanitizeError("two inputs share a base name; their outputs would collide")
-
         sanitizer = Sanitizer(salt, round_timestamps=args.round_timestamps_to_day)
+        # Output paths and every check on them come before anything is written.
+        outputs, derived = output_paths(args.inputs, args.output, sanitizer,
+                                        args.keep_filenames)
+        check_collisions(args.inputs, outputs,
+                         [("--save-salt", args.save_salt),
+                          ("--mapping-out", args.mapping_out)])
+
+        if not args.salt_file:
+            if args.save_salt:
+                save_salt(args.save_salt, salt)
+                sys.stderr.write("salt saved to %s (mode 0600); keep it secret\n" % args.save_salt)
+            elif len(args.inputs) == 1:
+                sys.stderr.write("note: a random salt was used; pass --save-salt to sanitize "
+                                 "other files from this customer consistently later\n")
+        if derived:
+            os.makedirs(args.output, exist_ok=True)
         for in_path, out_path in zip(args.inputs, outputs):
             sanitize_file(sanitizer, in_path, out_path, keep_extra)
 

@@ -429,7 +429,7 @@ func TestCLI(t *testing.T) {
 	salt := filepath.Join(f.dir, "salt")
 	mapping := filepath.Join(f.dir, "map.csv")
 	var errBuf bytes.Buffer
-	rc := Main([]string{src, "-o", out + string(os.PathSeparator), "--save-salt", salt, "--mapping-out", mapping}, &errBuf)
+	rc := Main([]string{src, "-o", out + string(os.PathSeparator), "--save-salt", salt, "--mapping-out", mapping, "--keep-filenames"}, &errBuf)
 	rc2 := Main([]string{filepath.Join(f.dir, "missing.csv"), "-o", out}, &errBuf)
 	if rc != 0 {
 		t.Errorf("rc = %d, want 0; stderr: %s", rc, errBuf.String())
